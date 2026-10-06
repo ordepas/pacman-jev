@@ -257,7 +257,6 @@ let lastJevDir=null;
 let jevConfidence=0;
 let jevChoice='?';
 let ticksSinceLastJev=0;
-const MAX_COAST_TICKS=6; // Coast on last dir, then ask emergency
 
 function buildJevState(){
   const gInfo=ghosts.map((g,i)=>{
@@ -422,8 +421,8 @@ function tick(){
     }
   }
 
-  // Ghost movement (every tick — game is slower to match JEV latency)
-  ghosts.forEach((g,i)=>ghostAI(g,i));
+  // Ghost movement (every 2 ticks for balance)
+  if(ghostTick%2===0)ghosts.forEach((g,i)=>ghostAI(g,i));
 
   // Collision detection
   ghosts.forEach(g=>{
@@ -493,7 +492,7 @@ function draw(){
   }catch(e){cx.fillStyle='#f00';cx.font='14px Courier New';cx.fillText('Error: '+e.message,10,20);}
 }
 
-let lt=0;const TMS=250; // Match JEV latency (~220ms) for 1 decision per tick
+let lt=0;const TMS=130;
 function loop(ts){if(!running)return;if(ts-lt>=TMS){lt=ts;tick();}draw();requestAnimationFrame(loop);}
 
 function startGame(){
