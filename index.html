@@ -257,7 +257,7 @@ let lastJevDir=null;
 let jevConfidence=0;
 let jevChoice='?';
 let ticksSinceLastJev=0;
-const MAX_COAST_TICKS=4; // Max ticks to coast on last JEV dir before forcing stop
+const MAX_COAST_TICKS=6; // Coast on last dir, then ask emergency
 
 function buildJevState(){
   const gInfo=ghosts.map((g,i)=>{
@@ -401,12 +401,9 @@ function tick(){
   // Ask JEV for direction — JEV is the ONLY brain
   if(!jevBusy)askJev();
 
-  // Coast on last JEV direction, but stop after MAX_COAST_TICKS if no new decision
+  // Coast on last JEV direction — keep moving until JEV says otherwise
+  // No stopping: JEV latency (~200ms) means ~2 ticks between decisions
   ticksSinceLastJev++;
-  if(ticksSinceLastJev>MAX_COAST_TICKS){
-    // Stop moving if JEV hasn't responded — safer than blindly continuing
-    pm.nd=[0,0];
-  }
 
   // Apply direction
   const prevPmX=pm.gx,prevPmY=pm.gy;
