@@ -354,7 +354,7 @@ function askJev(){
     // Ghost danger for this direction
     let minGD=99;
     ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<minGD)minGD=dd;}});
-    const danger=minGD<3?' DANGER!':' safe';
+    const danger=minGD<4?' DANGER!':' safe';
     criteria[d]=`Go ${d}: ${exits} exits, nearest ghost: ${minGD}${danger}`;
   }
 
@@ -367,7 +367,7 @@ function askJev(){
         instructions:`You are PAC-MAN on a ${C}x${R} grid. Choose ONE direction.
 
 CRITICAL RULES (in strict priority order):
-1. GHOST SAFETY: If ANY ghost (not scared) has dist<3, do NOT move toward it. Move AWAY. Choose the direction that MAXIMIZES distance from the nearest ghost AND has the most exit routes. This overrides ALL other rules.
+1. GHOST SAFETY: If ANY ghost (not scared) has dist<4, do NOT move toward it. Move AWAY. Choose the direction that MAXIMIZES distance from the nearest ghost AND has the most exit routes. This overrides ALL other rules.
 2. FOLLOW BFS HINT: If no ghost danger, follow the BFS HINT direction — it leads to the nearest dot.
 3. If STUCK ALERT appears in state, you are oscillating. Pick a DIFFERENT direction than the recent UP/DOWN or LEFT/RIGHT alternation. Go toward the quadrant with most dots.
 4. Grid: P=you #=wall .=dot O=power G=ghost pen g=ghost exit.
