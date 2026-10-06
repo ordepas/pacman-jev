@@ -341,82 +341,101 @@ function askJev(){
   const avail=state.available;
   if(!avail.length){jevBusy=false;return;}
 
-  // Build flee criteria dynamically
-  const fleeCrit={};
+  // Ghost danger per direction (local computation)
+  const ghostDangerPerDir={};
   for(const d of avail){
     const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
     if(nx<0)nx=C-1;if(nx>=C)nx-=C;
     let minGD=99;
     ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<minGD)minGD=dd;}});
-    fleeCrit[d]=`Flee ${d}: ${state.exits[d]} exits, ghost dist=${minGD}`;
-  }
-
-  // Build collect criteria dynamically
-  const collectCrit={};
-  for(const d of avail){
-    const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-    if(nx<0)nx=C-1;if(nx>=C)nx-=C;
-    const hasDot=dots.some(dd=>dd.gx===nx&&dd.gy===ny);
-    const isBfs=state.bfs_hint===d;
-    collectCrit[d]=`Go ${d}: ${hasDot?'HAS DOT ':''}${isBfs?'(BFS path) ':''}${state.exits[d]} exits`;
+    ghostDangerPerDir[d]=minGD;
   }
 
   const body={
     state:JSON.stringify(state),
     model:'jev-latest',
     questions:{
-      // Q1: Noul — immediate danger?
+      // Q1: Noul — is nearest ghost a threat?
       ghost_danger:{
         type:'noul',
-        instructions:"Is PAC-MAN in immediate danger from a ghost? Ghost dist<4 and NOT scared = danger.",
-        criteria:{true:"Ghost within 3 cells and actively chasing",false:"No ghost threat nearby or all ghosts scared"}
+        instructions:{
+          question:"Is the nearest non-scared ghost close enough to be a threat?",
+          data:"`nearest_ghost.dist` is the manhattan distance. dist<=3 is dangerous. dist<=5 is caution. dist>6 is safe.",
+          rule:"Answer YES (near 1.0) if nearest_ghost.dist<=4 AND nearest_ghost.scared=false. Answer NO (near 0.0) if dist>5 OR scared=true."
+        },
+        criteria:{true:"Ghost is within 4 cells and actively chasing (not scared)",false:"Ghost is far (>5 cells) or scared or dead"}
       },
-      // Q2: Choice — which direction to flee?
-      flee_dir:{
-        type:'choice',
-        instructions:"PAC-MAN must flee from ghosts. Choose the SAFEST direction: most exit routes, farthest from ghosts.",
-        criteria:fleeCrit
-      },
-      // Q3: Choice — which direction to collect dots?
+      // Q2: Choice — best direction to collect dots
       collect_dir:{
         type:'choice',
-        instructions:"PAC-MAN wants to collect dots. Choose direction toward nearest dot or BFS path. Prefer directions with dots on them.",
-        criteria:collectCrit
+        instructions:{
+          question:"PAC-MAN needs to collect dots. Which direction should it go?",
+          rule:"If state.bfs_hint is set, STRONGLY prefer that direction — it's the shortest path to the nearest dot via BFS. Only pick a different direction if bfs_hint direction has a ghost blocking it (check exits and ghost positions).",
+          data:"bfs_hint="+state.bfs_hint+" nearest_dot_dist="+state.nearest_dot.dist
+        },
+        criteria:Object.fromEntries(avail.map(d=>{
+          const isBfs=state.bfs_hint===d;
+          const hasDot=ghostDangerPerDir[d]===99?'safe':'ghost-near';
+          return[d,`${d}${isBfs?' ← BFS HINT (PREFER THIS) ':''} exits:${state.exits[d]} ghost_danger:${ghostDangerPerDir[d]}`];
+        }))
       },
-      // Q4: Noul — should chase scared ghost?
-      should_hunt:{
-        type:'noul',
-        instructions:"Should PAC-MAN chase a scared ghost? Only yes if a scared ghost is within 2 cells and path is clear.",
-        criteria:{true:"Scared ghost adjacent or 1 cell away, safe to grab",false:"No scared ghosts nearby or too risky"}
+      // Q3: Choice — safest direction to flee
+      flee_dir:{
+        type:'choice',
+        instructions:{
+          question:"PAC-MAN is in danger and must flee. Which direction maximizes survival?",
+          rule:"Pick the direction with the MOST exit routes and FARTHEST from the nearest ghost. Avoid directions with ghost_danger<3."
+        },
+        criteria:Object.fromEntries(avail.map(d=>{
+          return[d,`Flee ${d}: exits=${state.exits[d]} ghost_after=${ghostDangerPerDir[d]}`];
+        }))
       },
-      // Q5: Noul — should get power pellet?
-      should_powerup:{
-        type:'noul',
-        instructions:"Should PAC-MAN go for a power pellet? Only if ghosts are blocking dot paths and pellet is close (<8 cells).",
-        criteria:{true:"Ghosts blocking, pellet reachable, stuck situation",false:"No need for pellet now"}
-      },
-      // Q6: Score — how dangerous is current position?
+      // Q4: Score — overall danger level
       danger_level:{
         type:'score',
-        instructions:"Rate PAC-MAN's current danger level.",
+        instructions:{
+          question:"Rate PAC-MAN's danger. Use nearest_ghost.dist from state.",
+          rule:"nearest_ghost.dist<=1 → Critical (3). dist<=2 → Danger (2). dist<=4 → Caution (1). dist>5 → Safe (0). If scared=true, reduce by 1 level."
+        },
         criteria:[
-          "Safe: no ghosts within 6 cells",
-          "Caution: ghost within 4-6 cells",
-          "Danger: ghost within 2-3 cells, need to move away",
-          "Critical: ghost adjacent (1 cell), must flee NOW"
+          "Safe: nearest ghost dist>5 or all ghosts scared",
+          "Caution: nearest ghost dist=4-5, need awareness",
+          "Danger: nearest ghost dist=2-3, must move away NOW",
+          "Critical: nearest ghost dist<=1, immediate flee required"
         ]
+      },
+      // Q5: Noul — should chase scared ghost?
+      should_hunt:{
+        type:'noul',
+        instructions:{
+          question:"Should PAC-MAN chase a scared ghost?",
+          rule:"Only YES if scared_nearby has a ghost at dist<=1 AND no active (non-scared) ghost within 3 cells. Otherwise NO."
+        },
+        criteria:{true:"Scared ghost adjacent AND no active ghosts nearby",false:"No scared ghosts close or active ghosts threatening"}
+      },
+      // Q6: Noul — should get power pellet?
+      should_powerup:{
+        type:'noul',
+        instructions:{
+          question:"Should PAC-MAN go for a power pellet?",
+          rule:"Only YES if: (1) stuck=true OR nearest_ghost.dist<4, (2) power_pellet_dist<8, (3) no scared ghosts already active."
+        },
+        criteria:{true:"Stuck or threatened AND pellet is reachable",false:"No need for pellet now"}
       },
       // Q7: Noul — is BFS path safe?
       path_safe:{
         type:'noul',
-        instructions:"Is the BFS recommended direction (state.bfs_hint) safe from ghosts? Check if any ghost blocks that path within 3 cells.",
-        criteria:{true:"Path is clear, no ghosts blocking",false:"Ghost is blocking or near the BFS path"}
+        instructions:{
+          question:"Is the BFS recommended direction safe to follow?",
+          rule:"The BFS hint is: "+(state.bfs_hint||"none")+". Answer YES if no non-scared ghost is within 3 cells of that direction. Answer NO if a ghost blocks or patrols that path."
+        },
+        criteria:{true:"BFS direction is clear of ghost threats",false:"Ghost is blocking or near the BFS path"}
       }
     }
   };
 
   const t0=performance.now();
-  document.getElementById('jev-thinking').textContent='JEV analyzing 7 dimensions...';
+  const thEl=document.getElementById('jev-thinking');if(thEl)thEl.textContent='JEV analyzing...';
 
   fetch('http://localhost:4000/api/jev',{
     method:'POST',
@@ -428,14 +447,14 @@ function askJev(){
     if(a){
       jevAnswers=a;
       showDoomJev(a,jevMs);
-      const move=decideMove(a,avail);
+      const move=decideMove(a,avail,ghostDangerPerDir);
       if(move)pm.nd=[...move];
     }
   }).catch(e=>{
     jevMs=Math.round(performance.now()-t0);
-    document.getElementById('jev-thinking').textContent='Error: '+e.message;
+    const thEl=document.getElementById('jev-thinking');if(thEl)thEl.textContent='Error: '+e.message;
     logJev('ERROR: '+e.message,1);
-    // Fallback: use BFS
+    // Fallback: BFS
     const bfsDir=getBfsHint();
     if(bfsDir)pm.nd=[bfsDir[0]-pm.gx,bfsDir[1]-pm.gy];
   }).finally(()=>{
@@ -444,7 +463,7 @@ function askJev(){
 }
 
 // ── Decision logic (CODE, not model) ──
-function decideMove(a,avail){
+function decideMove(a,avail,ghostDangerPerDir){
   if(!avail.length)return null;
 
   const danger=a.ghost_danger?.noul||0;
@@ -456,32 +475,60 @@ function decideMove(a,avail){
   const collectDir=a.collect_dir?.choice;
   const collectConf=a.collect_dir?.confidence||0;
 
+  // Anti-oscillation: detect A-B-A-B pattern
+  let isStuck=false;
+  if(dots.length===lastDotCount)stuckTicks++;else{stuckTicks=0;lastDotCount=dots.length;}
+  lastDirs.push(aiStrategy);
+  if(lastDirs.length>8)lastDirs.shift();
+  if(lastDirs.length>=4){
+    const last4=lastDirs.slice(-4);
+    isStuck=(last4[0]===last4[2]&&last4[1]===last4[3]&&last4[0]!==last4[1])&&stuckTicks>6;
+  }
+
   let strategy='?';
   let move=null;
 
-  // PRIORITY 1: Flee if danger is high
-  if(danger>0.7&&fleeDir&&avail.includes(fleeDir)){
-    strategy='HUIR';
-    move=DIR_V[fleeDir];
+  // ── PRIORITY 1: Flee if real danger (ghost dist<4 locally computed) ──
+  const minLocalGhost=Math.min(...Object.values(ghostDangerPerDir));
+  if(minLocalGhost<4){
+    // Local flee: pick direction with most exits AND farthest from ghost
+    let bestDir=null,bestScore=-1;
+    for(const d of avail){
+      const gd=ghostDangerPerDir[d];
+      const exits=0;for(const dk of DIR_K){const v2=DIR_V[dk];const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];if(nx<0)nx=C-1;if(nx>=C)nx-=C;if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
+      const sc=gd*15+exits*5;
+      if(sc>bestScore){bestScore=sc;bestDir=d;}
+    }
+    // If JEV also says flee AND its direction is safe, prefer JEV's choice
+    if(danger>0.5&&fleeDir&&avail.includes(fleeDir)&&ghostDangerPerDir[fleeDir]>=minLocalGhost+1){
+      strategy='HUIR-J';
+      move=DIR_V[fleeDir];
+    }else if(bestDir){
+      strategy=minLocalGhost<2?'HUIR!':'HUIR';
+      move=DIR_V[bestDir];
+    }
   }
-  // PRIORITY 2: Hunt scared ghost if safe
-  else if(shouldHunt>0.7&&danger<0.4){
-    const nearScared=ghosts.filter(g=>g&&!g.dead&&g.scared&&Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<=2);
+
+  // ── PRIORITY 2: Hunt scared ghost (only if safe) ──
+  if(!move&&shouldHunt>0.6&&minLocalGhost>=4){
+    const nearScared=ghosts.filter(g=>g&&!g.dead&&g.scared&&Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<=1);
     if(nearScared.length){
       const g=nearScared[0];
       const dx=g.gx-pm.gx,dy=g.gy-pm.gy;
       const nd=[dx===-20?1:dx===20?-1:dx,dy];
-      if(avail.includes(DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]))){
+      const dirName=DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]);
+      if(dirName&&avail.includes(dirName)){
         strategy='CAZAR';
         move=nd;
       }
     }
   }
-  // PRIORITY 3: Power pellet if stuck and safe
-  else if(shouldPower>0.7&&stuckTicks>8&&danger<0.5){
+
+  // ── PRIORITY 3: Power pellet (if stuck and safe) ──
+  if(!move&&shouldPower>0.5&&stuckTicks>6&&minLocalGhost>=4){
     const nearPow=powers.map(p=>({...p,dist:Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy)}))
       .sort((a,b)=>a.dist-b.dist)[0];
-    if(nearPow){
+    if(nearPow&&nearPow.dist<10){
       const path=bfs(pm.gx,pm.gy,new Set([nearPow.gx+','+nearPow.gy]),false);
       if(path&&path.length>1){
         strategy='POWER';
@@ -490,38 +537,79 @@ function decideMove(a,avail){
       }
     }
   }
-  // PRIORITY 4: Collect dots (main behavior)
-  else if(collectDir&&avail.includes(collectDir)){
-    strategy='COLECTAR';
-    move=DIR_V[collectDir];
-    // If BFS path is safe and JEV agrees, great
-    // If BFS path is unsafe, trust JEV's collect direction
-  }
-  // PRIORITY 5: BFS fallback
-  else{
+
+  // ── PRIORITY 4: Collect dots (main behavior with BFS integration) ──
+  if(!move){
+    // STRATEGY: BFS hint is the default. JEV's collect_dir overrides only if confident.
     const bfsDir=getBfsHint();
-    if(bfsDir){
+    const bfsDirName=bfsDir?(DIR_K.find(k=>{
       const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
       const nd=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
-      const dirName=DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]);
-      if(dirName&&avail.includes(dirName)){
-        strategy='BFS';
-        move=nd;
+      return DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1];
+    })):null;
+
+    // If stuck, try to break the loop
+    if(isStuck){
+      // Pick a direction NOT in the oscillation pattern
+      const oscDirs=new Set(lastDirs.slice(-4));
+      const otherDirs=avail.filter(d=>!oscDirs.has(d));
+      if(otherDirs.length){
+        // Pick the one with most dots nearby
+        let bestAlt=otherDirs[0],bestDotScore=-1;
+        for(const d of otherDirs){
+          const v=DIR_V[d];let nx=pm.gx+v[0]*3,ny=pm.gy+v[1]*3;
+          if(nx<0)nx+=C;if(nx>=C)nx-=C;
+          let dotCount=0;
+          for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+            let cx2=nx+dx,cy2=ny+dy;
+            if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
+            if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
+          }
+          if(dotCount>bestDotScore){bestDotScore=dotCount;bestAlt=d;}
+        }
+        strategy='BREAK';
+        move=DIR_V[bestAlt];
+        lastDirs=[];stuckTicks=0;
       }
     }
-    // LAST RESORT: pick safest available direction
+
+    // Normal collection: prefer BFS, use JEV if confident and path is safe
     if(!move){
-      strategy='SAFE';
-      let best=avail[0],bestScore=-1;
-      for(const d of avail){
-        const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-        if(nx<0)nx=C-1;if(nx>=C)nx-=C;
-        let gd=99;ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;}});
-        let exits=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
-        const sc=gd*10+exits*5;
-        if(sc>bestScore){bestScore=sc;best=d;}
+      if(bfsDirName&&avail.includes(bfsDirName)){
+        // BFS path available — use it unless JEV says it's unsafe
+        if(pathSafe<0.3&&collectDir&&avail.includes(collectDir)&&collectConf>0.5){
+          // BFS path is unsafe, JEV has a confident alternative
+          strategy='COLECT-J';
+          move=DIR_V[collectDir];
+        }else{
+          // BFS path is safe (or JEV has no better idea)
+          strategy='COLECTAR';
+          const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
+          move=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
+        }
+      }else if(collectDir&&avail.includes(collectDir)){
+        // No BFS hint, use JEV's direction
+        strategy='COLECT-J';
+        move=DIR_V[collectDir];
+      }else{
+        // Last resort: pick direction with most dots nearby
+        strategy='EXPLORE';
+        let best=avail[0],bestScore=-1;
+        for(const d of avail){
+          const v=DIR_V[d];let nx=pm.gx+v[0]*2,ny=pm.gy+v[1]*2;
+          if(nx<0)nx+=C;if(nx>=C)nx-=C;
+          let dotCount=0;
+          for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+            let cx2=nx+dx,cy2=ny+dy;
+            if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
+            if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
+          }
+          const gd=ghostDangerPerDir[d]||99;
+          const sc=dotCount*10+(gd>4?5:0);
+          if(sc>bestScore){bestScore=sc;best=d;}
+        }
+        move=DIR_V[best];
       }
-      move=DIR_V[best];
     }
   }
 
