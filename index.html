@@ -53,7 +53,7 @@ canvas{display:block}
 <div id="app">
   <div id="panel">
     <h1>PAC-MAN</h1>
-    <div class="sub">J E V &nbsp; E D I T I O N</div>
+    <div class="sub">D O O M &nbsp; S T Y L E &nbsp; x &nbsp; J E V</div>
     <div class="sec">
       <h3>Modo de Juego</h3>
       <button class="btn btn-mode mode-manual active" onclick="setMode('manual')">&#9654; MANUAL &mdash; Flechas del Teclado</button>
@@ -75,6 +75,7 @@ canvas{display:block}
       <h3>Decision JEV en Tiempo Real</h3>
       <div id="jev-ms">-- <small>ms</small></div>
       <div id="jev-act"></div>
+      <div id="jev-thinking" style="font-size:10px;color:#4CC9F0;text-align:center;min-height:14px;margin-top:4px"></div>
       <div class="dir-bars">
         <div class="dbar du"><span class="lbl">&#9650;</span><div class="bg"><div class="fill" id="bu" style="width:0%"></div></div><span class="pct" id="pu">0%</span></div>
         <div class="dbar dd"><span class="lbl">&#9660;</span><div class="bg"><div class="fill" id="bd" style="width:0%"></div></div><span class="pct" id="pd">0%</span></div>
@@ -243,179 +244,326 @@ function ghostAI(g,idx){
   else if(inPen&&G[g.gy]?.[g.gx]===2){g.d=[0,-1];}
 }
 
-// ═══ LOCAL AI - Survival-Focused ═══
-let cachedPath=null,cachedTarget=null,stuckTicks=0,lastDotCount=0;
-let blacklistedDots=new Map(),patienceTicks=0;
+// ═══════════════════════════════════════════════════════════
+//  DOOM-STYLE JEV BRAIN
+//  7 parallel questions in 1 API call.
+//  Code combines answers into final decision.
+// ═══════════════════════════════════════════════════════════
 
-function escapeRoutes(gx,gy){
-  let r=0;for(const dk of DIR_K){const v=DIR_V[dk];if(!isW(gx+v[0],gy+v[1],false))r++;}return r;
+let jevBusy=false, jevMs=0, jevCalls=0;
+let jevAnswers=null; // Last set of answers from JEV
+let stuckTicks=0, lastDotCount=0, lastDirs=[];
+let bfsCache=null, bfsTarget=null;
+
+// ── Local BFS (fallback + hints) ──
+function findNearestDot(){
+  const sorted=dots.map(d=>({...d,dist:Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy)}))
+    .sort((a,b)=>a.dist-b.dist);
+  for(const dot of sorted){
+    const path=bfs(pm.gx,pm.gy,new Set([dot.gx+','+dot.gy]),false);
+    if(path&&path.length>1)return{dot,path,dir:path[1]};
+  }
+  return null;
 }
-function ghostDistAt(gx,gy,pred){
-  let min=99;
-  ghosts.forEach(g=>{
-    if(!g||g.dead)return;
-    const d1=Math.abs(gx-g.gx)+Math.abs(gy-g.gy);if(d1<min)min=d1;
-    if(pred>0&&g.d){
-      const d2=Math.abs(gx-wrapX(g.gx+g.d[0]*pred))+Math.abs(gy-(g.gy+g.d[1]*pred));
-      if(d2<min)min=d2;
-    }
-  });
-  return min;
+function getBfsHint(){
+  if(bfsCache&&bfsTarget&&dots.some(d=>d.gx===bfsTarget[0]&&d.gy===bfsTarget[1])){
+    if(bfsCache.length>1&&bfsCache[1][0]===pm.gx&&bfsCache[1][1]===pm.gy)bfsCache.shift();
+    if(bfsCache.length>1)return bfsCache[1];
+  }
+  const result=findNearestDot();
+  if(result){bfsCache=result.path;bfsTarget=[result.dot.gx,result.dot.gy];return result.dir;}
+  return null;
 }
 
-function localAI(){
+// ── Build compact structured state ──
+function buildState(){
+  // Nearest ghost info
+  const gSorted=ghosts.map((g,i)=>{
+    if(!g||g.dead)return null;
+    const dist=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);
+    const dir=g.d?(g.d[1]<0?'up':g.d[1]>0?'down':g.d[0]<0?'left':'right'):'?';
+    return{dist,dir,scared:g.scared,x:g.gx,y:g.gy,idx:i};
+  }).filter(Boolean).sort((a,b)=>a.dist-b.dist);
+
+  const nearest=gSorted[0]||{dist:99,scared:true};
+  const second=gSorted[1]||{dist:99,scared:true};
+  const scaredGhosts=gSorted.filter(g=>g.scared&&g.dist<6);
+
+  // Nearest dot
+  const nearDot=dots.map(d=>({x:d.gx,y:d.gy,dist:Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy)}))
+    .sort((a,b)=>a.dist-b.dist)[0]||{dist:99};
+
+  // BFS hint
+  const bfsDir=getBfsHint();
+  const bfsDirName=bfsDir?(bfsDir[1]<0?'up':bfsDir[1]>0?'down':bfsDir[0]<0?'left':'right'):null;
+
+  // Power pellet
+  const nearPow=powers.map(p=>({dist:Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy)}))
+    .sort((a,b)=>a.dist-b.dist)[0]||{dist:99};
+
+  // Available directions with exits
   const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
-  if(!avail.length)return null;
-
-  // Stuck detection
-  if(dots.length===lastDotCount){stuckTicks++;}else{stuckTicks=0;lastDotCount=dots.length;}
-  if(stuckTicks>15){cachedPath=null;cachedTarget=null;stuckTicks=0;}
-  for(const [k] of blacklistedDots){const [bx,by]=k.split(',').map(Number);if(!dots.some(d=>d.gx===bx&&d.gy===by))blacklistedDots.delete(k);}
-
-  // Ghost distance (current position only)
-  let minGDist=99;
-  ghosts.forEach(g=>{if(!g||g.dead)return;const d=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);if(d<minGDist)minGDist=d;});
-  const allScared=ghosts.every(g=>!g||g.dead||g.scared);
-
-  // CRITICAL: ghost next to us - flee
-  if(minGDist<2&&!allScared){
-    aiStrategy='HUIR!';
-    let bestD=avail[0],bestS=-999;
-    for(const d of avail){
-      const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-      if(nx<0)nx=C-1;if(nx>=C)nx=0;
-      let gd=99;ghosts.forEach(g=>{if(!g||g.dead)return;const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;});
-      let routes=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
-      const sc=gd*15+routes*8;if(sc>bestS){bestS=sc;bestD=d;}
-    }
-    cachedPath=null;return DIR_V[bestD];
-  }
-
-  // DANGER: ghost nearby - move to safer position
-  if(minGDist<3.5&&!allScared){
-    aiStrategy='HUIR';
-    let bestD=avail[0],bestS=-999;
-    for(const d of avail){
-      const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-      if(nx<0)nx=C-1;if(nx>=C)nx=0;
-      let gd=99;ghosts.forEach(g=>{if(!g||g.dead||g.scared)return;const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;});
-      let routes=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
-      const hd=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?8:0;
-      const sc=gd*10+routes*5+hd;if(sc>bestS){bestS=sc;bestD=d;}
-    }
-    cachedPath=null;return DIR_V[bestD];
-  }
-
-  // POWER-RUN: stuck + ghost blocking + pellet available
-  let nearPow=null,nearPowD=99;
-  for(const p of powers){const d=Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy);if(d<nearPowD){nearPowD=d;nearPow=p;}}
-  let activeBlock=false;
-  ghosts.forEach(g=>{if(!g||g.dead||g.scared)return;if(Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<6)activeBlock=true;});
-  if(stuckTicks>12&&nearPow&&nearPowD<8&&activeBlock&&!allScared){
-    aiStrategy='POWER-RUN';
-    const path=bfs(pm.gx,pm.gy,new Set([nearPow.gx+','+nearPow.gy]),false);
-    if(path&&path.length>1){cachedPath=null;stuckTicks=0;const n=path[1];return[(n[0]-pm.gx+C)%C===C-1?1:(n[0]-pm.gx+C)%C===1?-1:n[0]-pm.gx,n[1]-pm.gy];}
-  }
-
-  // CAZAR: scared ghost exactly 1 step away
-  if(allScared){
-    for(const g of ghosts){
-      if(!g||g.dead||!g.scared)continue;
-      if(Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<=1){
-        const dx=g.gx-pm.gx,dy=g.gy-pm.gy;
-        const nd=[dx===-20?1:dx===20?-1:dx,dy];
-        if(canP(pm.gx,pm.gy,nd,false)){aiStrategy='CAZAR';cachedPath=null;return nd;}
-      }
-    }
-  }
-
-  // COLECTAR: dots first
-  aiStrategy='COLECTAR';
-  if(cachedPath&&cachedTarget){
-    if(!dots.some(d=>d.gx===cachedTarget[0]&&d.gy===cachedTarget[1])||cachedPath.length<2){cachedPath=null;cachedTarget=null;}
-    else{const n=cachedPath[1];if(n&&n[0]===pm.gx&&n[1]===pm.gy)cachedPath.shift();}
-  }
-
-  if(!cachedPath||cachedPath.length<2){
-    const desperate=dots.length<=8;
-    const avail2=dots.filter(d=>{if(desperate)return true;const k=d.gx+','+d.gy;return!blacklistedDots.has(k)||blacklistedDots.get(k)<3;});
-    if(!avail2.length)return null;
-    const sorted=[...avail2].sort((a,b)=>{
-      const da=Math.abs(a.gx-pm.gx)+Math.abs(a.gy-pm.gy);
-      const db=Math.abs(b.gx-pm.gx)+Math.abs(b.gy-pm.gy);
-      let ga=99,gb=99;
-      ghosts.forEach(g=>{if(!g||g.dead||g.scared)return;const d1=Math.abs(a.gx-g.gx)+Math.abs(a.gy-g.gy);const d2=Math.abs(b.gx-g.gx)+Math.abs(b.gy-g.gy);if(d1<ga)ga=d1;if(d2<gb)gb=d2;});
-      return(da+(ga<3?20:0))-(db+(gb<3?20:0));
-    }).slice(0,15);
-    for(const dot of sorted){
-      const path=bfs(pm.gx,pm.gy,new Set([dot.gx+','+dot.gy]),false);
-      if(path&&path.length>1){cachedPath=path;cachedTarget=[dot.gx,dot.gy];break;}
-    }
-  }
-
-  if(cachedPath&&cachedPath.length>1){
-    const next=cachedPath[1];
-    const dx=next[0]-pm.gx,dy=next[1]-pm.gy;
-    const nd=[dx===-20?1:dx===20?-1:dx,dy];
-    // Avoid power pellet if no active ghost nearby
-    const hasPow=powers.some(p=>p.gx===next[0]&&p.gy===next[1]);
-    if(hasPow&&minGDist>6&&!activeBlock&&cachedPath.length>3){
-      let altD=null,altS=-999;
-      for(const d of avail){
-        const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-        if(nx===next[0]&&ny===next[1])continue;if(isW(nx,ny,false))continue;
-        let gd=99;ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;}});
-        const hd=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?15:0;
-        const sc=gd*5+hd;if(sc>altS){altS=sc;altD=d;}
-      }
-      if(altD){cachedPath=null;return DIR_V[altD];}
-    }
-    return nd;
-  }
-
-  // Fallback: explore
-  aiStrategy='EXPLORAR';
-  let bestD=avail[0],bestS=-999;
+  const exits={};
   for(const d of avail){
     const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-    if(nx<0)nx=C-1;if(nx>=C)nx=0;
-    let gd=99;ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;}});
-    const hd=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?15:0;
-    const sc=gd*8+hd;if(sc>bestS){bestS=sc;bestD=d;}
+    if(nx<0)nx=C-1;if(nx>=C)nx-=C;
+    let r=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))r++;}
+    exits[d]=r;
   }
-  return DIR_V[bestD];
+
+  // Stuck detection
+  if(dots.length===lastDotCount)stuckTicks++;else{stuckTicks=0;lastDotCount=dots.length;}
+
+  return{
+    pacman:{x:pm.gx,y:pm.gy,dir:pm.d[1]<0?'up':pm.d[1]>0?'down':pm.d[0]<0?'left':pm.d[0]>0?'right':'none'},
+    nearest_ghost:{dist:nearest.dist,dir:nearest.dir,scared:nearest.scared},
+    second_ghost:{dist:second.dist,dir:second.dir,scared:second.scared},
+    scared_nearby:scaredGhosts.map(g=>({dist:g.dist})),
+    nearest_dot:{dist:nearDot.dist},
+    bfs_hint:bfsDirName,
+    power_pellet_dist:nearPow.dist,
+    available:avail,
+    exits,
+    dots_left:dots.length+powers.length,
+    level,score,lives,
+    stuck:stuckTicks>8
+  };
 }
 
-// ═══ JEV OVERLAY ═══
-let lastJevDir=null;
+// ── Ask JEV: 7 parallel questions ──
 function askJev(){
+  if(jevBusy)return;
   jevBusy=true;
-  const nearGhost=ghosts.reduce((b,g,i)=>{if(!g||g.dead)return b;const d=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);return d<b.dist?{idx:i,dist:d,scared:g.scared}:b;},{idx:-1,dist:999,scared:false});
-  const nearDot=dots.reduce((b,d)=>{const dist=Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy);return dist<b.dist?{gx:d.gx,gy:d.gy,dist}:b;},{dist:999,gx:0,gy:0});
-  const nearPower=powers.reduce((b,p)=>{const dist=Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy);return dist<b.dist?{gx:p.gx,gy:p.gy,dist}:b;},{dist:999,gx:0,gy:0});
-  const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
-  const state=`PAC-MAN: pos=(${pm.gx},${pm.gy}) strat=${aiStrategy}. Ghost: dist=${nearGhost.dist} scared=${nearGhost.scared}. Dot: dist=${nearDot.dist}. Power: dist=${nearPower.dist}. Left: ${dots.length}/${totalD}. Score=${score} Lives=${lives} Lv=${level}.`;
-  const crit={};
-  for(const d of avail)crit[d]=`Dir ${d.toUpperCase()}: ${aiStrategy}`;
+  jevCalls++;
+
+  const state=buildState();
+  const avail=state.available;
+  if(!avail.length){jevBusy=false;return;}
+
+  // Build flee criteria dynamically
+  const fleeCrit={};
+  for(const d of avail){
+    const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
+    if(nx<0)nx=C-1;if(nx>=C)nx-=C;
+    let minGD=99;
+    ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<minGD)minGD=dd;}});
+    fleeCrit[d]=`Flee ${d}: ${state.exits[d]} exits, ghost dist=${minGD}`;
+  }
+
+  // Build collect criteria dynamically
+  const collectCrit={};
+  for(const d of avail){
+    const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
+    if(nx<0)nx=C-1;if(nx>=C)nx-=C;
+    const hasDot=dots.some(dd=>dd.gx===nx&&dd.gy===ny);
+    const isBfs=state.bfs_hint===d;
+    collectCrit[d]=`Go ${d}: ${hasDot?'HAS DOT ':''}${isBfs?'(BFS path) ':''}${state.exits[d]} exits`;
+  }
+
+  const body={
+    state:JSON.stringify(state),
+    model:'jev-latest',
+    questions:{
+      // Q1: Noul — immediate danger?
+      ghost_danger:{
+        type:'noul',
+        instructions:"Is PAC-MAN in immediate danger from a ghost? Ghost dist<4 and NOT scared = danger.",
+        criteria:{true:"Ghost within 3 cells and actively chasing",false:"No ghost threat nearby or all ghosts scared"}
+      },
+      // Q2: Choice — which direction to flee?
+      flee_dir:{
+        type:'choice',
+        instructions:"PAC-MAN must flee from ghosts. Choose the SAFEST direction: most exit routes, farthest from ghosts.",
+        criteria:fleeCrit
+      },
+      // Q3: Choice — which direction to collect dots?
+      collect_dir:{
+        type:'choice',
+        instructions:"PAC-MAN wants to collect dots. Choose direction toward nearest dot or BFS path. Prefer directions with dots on them.",
+        criteria:collectCrit
+      },
+      // Q4: Noul — should chase scared ghost?
+      should_hunt:{
+        type:'noul',
+        instructions:"Should PAC-MAN chase a scared ghost? Only yes if a scared ghost is within 2 cells and path is clear.",
+        criteria:{true:"Scared ghost adjacent or 1 cell away, safe to grab",false:"No scared ghosts nearby or too risky"}
+      },
+      // Q5: Noul — should get power pellet?
+      should_powerup:{
+        type:'noul',
+        instructions:"Should PAC-MAN go for a power pellet? Only if ghosts are blocking dot paths and pellet is close (<8 cells).",
+        criteria:{true:"Ghosts blocking, pellet reachable, stuck situation",false:"No need for pellet now"}
+      },
+      // Q6: Score — how dangerous is current position?
+      danger_level:{
+        type:'score',
+        instructions:"Rate PAC-MAN's current danger level.",
+        criteria:[
+          "Safe: no ghosts within 6 cells",
+          "Caution: ghost within 4-6 cells",
+          "Danger: ghost within 2-3 cells, need to move away",
+          "Critical: ghost adjacent (1 cell), must flee NOW"
+        ]
+      },
+      // Q7: Noul — is BFS path safe?
+      path_safe:{
+        type:'noul',
+        instructions:"Is the BFS recommended direction (state.bfs_hint) safe from ghosts? Check if any ghost blocks that path within 3 cells.",
+        criteria:{true:"Path is clear, no ghosts blocking",false:"Ghost is blocking or near the BFS path"}
+      }
+    }
+  };
+
   const t0=performance.now();
-  fetch('http://localhost:4000/api/jev',{method:'POST',
+  document.getElementById('jev-thinking').textContent='JEV analyzing 7 dimensions...';
+
+  fetch('http://localhost:4000/api/jev',{
+    method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({state,model:'jev-latest',questions:{strat:{type:'choice',
-      instructions:'Best strategy? FLEE if ghost close. COLLECT dots. HUNT scared ghosts nearby. POWER-UP if stuck.',
-      criteria:{FLEE:'Ghost close, run!','COLLECT':'Safe to collect dots',HUNT:'Scared ghost nearby','POWERUP':'Get pellet to clear path'}}}})
+    body:JSON.stringify(body)
   }).then(r=>r.json()).then(data=>{
-    jevMs=Math.round(performance.now()-t0);const a=data.answers?.strat;
-    if(a){showJev(a,jevMs);if(a.confidence>0.6){const m={FLEE:'HUIR','COLLECT':'COLECTAR',HUNT:'CAZAR','POWERUP':'POWER-RUN'};if(m[a.choice])aiStrategy=m[a.choice];}}
-  }).catch(e=>{jevMs=Math.round(performance.now()-t0);}).finally(()=>{jevBusy=false;});
+    jevMs=Math.round(performance.now()-t0);
+    const a=data.answers;
+    if(a){
+      jevAnswers=a;
+      showDoomJev(a,jevMs);
+      const move=decideMove(a,avail);
+      if(move)pm.nd=[...move];
+    }
+  }).catch(e=>{
+    jevMs=Math.round(performance.now()-t0);
+    document.getElementById('jev-thinking').textContent='Error: '+e.message;
+    logJev('ERROR: '+e.message,1);
+    // Fallback: use BFS
+    const bfsDir=getBfsHint();
+    if(bfsDir)pm.nd=[bfsDir[0]-pm.gx,bfsDir[1]-pm.gy];
+  }).finally(()=>{
+    jevBusy=false;
+  });
 }
-function showJev(a,ms){
-  const p=a.probabilities||{};
+
+// ── Decision logic (CODE, not model) ──
+function decideMove(a,avail){
+  if(!avail.length)return null;
+
+  const danger=a.ghost_danger?.noul||0;
+  const dangerLvl=a.danger_level?.score||0;
+  const shouldHunt=a.should_hunt?.noul||0;
+  const shouldPower=a.should_powerup?.noul||0;
+  const pathSafe=a.path_safe?.noul||0;
+  const fleeDir=a.flee_dir?.choice;
+  const collectDir=a.collect_dir?.choice;
+  const collectConf=a.collect_dir?.confidence||0;
+
+  let strategy='?';
+  let move=null;
+
+  // PRIORITY 1: Flee if danger is high
+  if(danger>0.7&&fleeDir&&avail.includes(fleeDir)){
+    strategy='HUIR';
+    move=DIR_V[fleeDir];
+  }
+  // PRIORITY 2: Hunt scared ghost if safe
+  else if(shouldHunt>0.7&&danger<0.4){
+    const nearScared=ghosts.filter(g=>g&&!g.dead&&g.scared&&Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<=2);
+    if(nearScared.length){
+      const g=nearScared[0];
+      const dx=g.gx-pm.gx,dy=g.gy-pm.gy;
+      const nd=[dx===-20?1:dx===20?-1:dx,dy];
+      if(avail.includes(DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]))){
+        strategy='CAZAR';
+        move=nd;
+      }
+    }
+  }
+  // PRIORITY 3: Power pellet if stuck and safe
+  else if(shouldPower>0.7&&stuckTicks>8&&danger<0.5){
+    const nearPow=powers.map(p=>({...p,dist:Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy)}))
+      .sort((a,b)=>a.dist-b.dist)[0];
+    if(nearPow){
+      const path=bfs(pm.gx,pm.gy,new Set([nearPow.gx+','+nearPow.gy]),false);
+      if(path&&path.length>1){
+        strategy='POWER';
+        const n=path[1];
+        move=[(n[0]-pm.gx+C)%C===C-1?1:(n[0]-pm.gx+C)%C===1?-1:n[0]-pm.gx,n[1]-pm.gy];
+      }
+    }
+  }
+  // PRIORITY 4: Collect dots (main behavior)
+  else if(collectDir&&avail.includes(collectDir)){
+    strategy='COLECTAR';
+    move=DIR_V[collectDir];
+    // If BFS path is safe and JEV agrees, great
+    // If BFS path is unsafe, trust JEV's collect direction
+  }
+  // PRIORITY 5: BFS fallback
+  else{
+    const bfsDir=getBfsHint();
+    if(bfsDir){
+      const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
+      const nd=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
+      const dirName=DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]);
+      if(dirName&&avail.includes(dirName)){
+        strategy='BFS';
+        move=nd;
+      }
+    }
+    // LAST RESORT: pick safest available direction
+    if(!move){
+      strategy='SAFE';
+      let best=avail[0],bestScore=-1;
+      for(const d of avail){
+        const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
+        if(nx<0)nx=C-1;if(nx>=C)nx-=C;
+        let gd=99;ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;}});
+        let exits=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
+        const sc=gd*10+exits*5;
+        if(sc>bestScore){bestScore=sc;best=d;}
+      }
+      move=DIR_V[best];
+    }
+  }
+
+  aiStrategy=strategy;
+  return move;
+}
+
+// ── Show DOOM-style results in UI ──
+function showDoomJev(a,ms){
   document.getElementById('jev-ms').innerHTML=ms+' <small>ms</small>';
-  const sn=['FLEE','COLLECT','HUNT','POWERUP'];
-  for(let i=0;i<4;i++){const d=DIR_K[i];const v=p[sn[i]]||0;document.getElementById('b'+d[0]).style.width=v*100+'%';document.getElementById('p'+d[0]).textContent=Math.round(v*100)+'%';}
-  const ch=a.choice||'?';const cf=a.confidence!=null?Math.round(a.confidence*100)+'%':'--';
-  document.getElementById('jev-act').innerHTML=`<span style="color:#76ff03">${ch}</span> &middot; Conf: ${cf}`;
-  logJev(`${ch} &middot; ${ms}ms &middot; conf=${cf}`);
+  document.getElementById('jev-thinking').textContent='';
+
+  // Show danger level bar
+  const danger=a.danger_level||{score:0,confidence:0};
+  const dangerPct=Math.round((danger.score/3)*100);
+  document.getElementById('bu').style.width=dangerPct+'%';
+  document.getElementById('pu').textContent=dangerPct+'%';
+
+  // Show ghost danger noul
+  const gd=a.ghost_danger||{noul:0};
+  document.getElementById('bd').style.width=Math.round(gd.noul*100)+'%';
+  document.getElementById('pd').textContent=Math.round(gd.noul*100)+'%';
+
+  // Show collect confidence
+  const cc=a.collect_dir||{confidence:0};
+  document.getElementById('bl').style.width=Math.round((cc.confidence||0)*100)+'%';
+  document.getElementById('pl').textContent=Math.round((cc.confidence||0)*100)+'%';
+
+  // Show path safety
+  const ps=a.path_safe||{noul:0};
+  document.getElementById('br').style.width=Math.round(ps.noul*100)+'%';
+  document.getElementById('pr').textContent=Math.round(ps.noul*100)+'%';
+
+  const cf=danger.confidence!=null?Math.round(danger.confidence*100)+'%':'--';
+  document.getElementById('jev-act').innerHTML=
+    `<span style="color:#F72585">${aiStrategy}</span> &middot; Danger:${Math.round(gd.noul*100)}% &middot; Conf:${cf}`;
+  document.getElementById('s-calls').textContent=jevCalls;
+
+  // Update bar labels
+  const labels=document.querySelectorAll('.dbar .lbl');
+  if(labels.length>=4){labels[0].textContent='!';labels[1].textContent='G';labels[2].textContent='C';labels[3].textContent='P';}
+
+  logJev(`${aiStrategy} &middot; ${ms}ms &middot; danger=${Math.round(gd.noul*100)}% hunt=${Math.round((a.should_hunt?.noul||0)*100)}% path=${Math.round(ps.noul*100)}%`,0);
 }
 function logJev(m,err){
   const el=document.getElementById('jev-log');const t=new Date().toLocaleTimeString();
@@ -429,7 +577,11 @@ let ghostTick=0;
 function tick(){
   if(!pm)return;
   ghostTick++;
-  if(mode==='jev'){const ai=localAI();if(ai)pm.nd=[...ai];}
+  if(mode==='jev'){
+    // Ask JEV (async, non-blocking). Decision applied in callback.
+    if(!jevBusy)askJev();
+    // While waiting, coast on last direction (JEV latency ~150ms = ~1 tick)
+  }
   const prevPmX=pm.gx,prevPmY=pm.gy;
   if(pm.nd[0]||pm.nd[1]){if(canP(pm.gx,pm.gy,pm.nd,false))pm.d=[...pm.nd];}
   if(pm.d[0]||pm.d[1]){if(canP(pm.gx,pm.gy,pm.d,false)){pm.gx+=pm.d[0];pm.gy+=pm.d[1];pm.gx=wrapX(pm.gx);}else pm.d=[0,0];}
@@ -451,13 +603,12 @@ function tick(){
     const cross=(g.gx===prevPmX&&g.gy===prevPmY&&pm.gx===g._prevGx&&pm.gy===g._prevGy);
     if(same||cross){
       if(g.scared){score+=200;g.dead=60;g.scared=false;}
-      else{lives--;if(lives<=0)return gameOver();pm.reset();ghosts.forEach(g2=>g2.reset());}
+      else{lives--;if(lives<=0)return gameOver();pm.reset();ghosts.forEach(g2=>g2.reset());bfsCache=null;bfsTarget=null;}
     }
     g._prevGx=g.gx;g._prevGy=g.gy;
   });
-  if(!dots.length&&!powers.length){level++;init();pm.reset();}
+  if(!dots.length&&!powers.length){level++;init();pm.reset();bfsCache=null;bfsTarget=null;}
   ui();
-  if(mode==='jev'&&!jevBusy&&Date.now()%8<1)askJev();
 }
 
 function ui(){
@@ -503,7 +654,7 @@ function draw(){
   }
   for(let i=0;i<lives;i++){cx.fillStyle=COL.pac;cx.beginPath();cx.arc(16+i*22,H-14,8,.25*Math.PI,1.75*Math.PI);cx.lineTo(16+i*22,H-14);cx.fill();}
   cx.fillStyle='#333';cx.font='10px Courier New';cx.textAlign='right';cx.fillText('LV '+level,W-10,H-10);cx.textAlign='left';
-  if(mode==='jev'){cx.fillStyle='rgba(0,0,0,.6)';cx.fillRect(5,5,90,18);cx.fillStyle=aiStrategy==='HUIR'?'#F72585':aiStrategy==='COLECTAR'?'#76ff03':aiStrategy==='CAZAR'?'#4CC9F0':'#ffe033';cx.font='bold 11px Courier New';cx.fillText(aiStrategy,10,18);}
+  if(mode==='jev'){cx.fillStyle='rgba(0,0,0,.6)';cx.fillRect(5,5,120,18);cx.fillStyle=aiStrategy==='HUIR'?'#F72585':aiStrategy==='COLECTAR'?'#76ff03':aiStrategy==='CAZAR'?'#4CC9F0':aiStrategy==='POWER'?'#FFB852':aiStrategy==='BFS'?'#b56eff':'#ffe033';cx.font='bold 11px Courier New';cx.fillText('DOOM: '+aiStrategy,10,18);}
   }catch(e){cx.fillStyle='#f00';cx.font='14px Courier New';cx.fillText('Error: '+e.message,10,20);}
 }
 
