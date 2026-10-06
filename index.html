@@ -335,6 +335,7 @@ function askJev(){
   if(jevBusy)return;
   jevBusy=true;
   jevCalls++;
+  const callsEl=document.getElementById('s-calls');if(callsEl)callsEl.textContent=jevCalls;
 
   const state=buildState();
   const avail=state.available;
