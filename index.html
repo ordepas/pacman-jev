@@ -300,7 +300,7 @@ function buildJevState(){
 
   // Stuck detection
   if(dots.length===lastDotCount)stuckCount++;else{stuckCount=0;lastDotCount=dots.length;}
-  const stuck=stuckCount>8?'STUCK!':'';
+  const stuck=stuckCount>8?`ALERT: STUCK for ${stuckCount} ticks! You MUST pick a DIFFERENT direction than recent moves. Explore toward dense dot areas.`:'';
 
   // 5x5 neighborhood
   let hood='';
@@ -369,7 +369,7 @@ function askJev(){
 CRITICAL RULES (in strict priority order):
 1. GHOST SAFETY: If ANY ghost (not scared) has dist<3, do NOT move toward it. Move AWAY. Choose the direction that MAXIMIZES distance from the nearest ghost AND has the most exit routes. This overrides ALL other rules.
 2. FOLLOW BFS HINT: If no ghost danger, follow the BFS HINT direction — it leads to the nearest dot.
-3. If STUCK (>8 ticks no dot), move toward quadrant with most dots (DOT DENSITY).
+3. If STUCK ALERT appears in state, you are oscillating. Pick a DIFFERENT direction than the recent UP/DOWN or LEFT/RIGHT alternation. Go toward the quadrant with most dots.
 4. Grid: P=you #=wall .=dot O=power G=ghost pen g=ghost exit.
 5. Left/right edges connect (tunnel).
 
@@ -394,40 +394,6 @@ The BFS HINT is a suggestion. GHOST SAFETY is mandatory.`,
       jevConfidence=a.confidence||0;
       showJev(a,jevMs);
       if(avail.includes(jevChoice)){
-        // Anti-oscillation: detect simple A-B-A-B pattern
-        lastDirs.push(jevChoice);
-        if(lastDirs.length>6)lastDirs.shift();
-
-        // Check for alternating pattern (UP DOWN UP DOWN or LEFT RIGHT LEFT RIGHT)
-        if(lastDirs.length>=4){
-          const last4=lastDirs.slice(-4);
-          const isABAB=last4[0]===last4[2]&&last4[1]===last4[3]&&last4[0]!==last4[1];
-          if(isABAB&&stuckCount>6){
-            // Pick a direction that's NOT in the oscillation pair
-            const oscPair=new Set([last4[0],last4[1]]);
-            const otherDirs=avail.filter(d=>!oscPair.has(d));
-            if(otherDirs.length){
-              // Pick the one with most dots nearby
-              let bestAlt=otherDirs[0],bestScore=-1;
-              for(const d of otherDirs){
-                const v=DIR_V[d];let nx=pm.gx+v[0]*2,ny=pm.gy+v[1]*2;
-                if(nx<0)nx+=C;if(nx>=C)nx-=C;
-                let dotCount=0;
-                for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-                  let cx2=nx+dx,cy2=ny+dy;
-                  if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
-                  if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
-                }
-                if(dotCount>bestScore){bestScore=dotCount;bestAlt=d;}
-              }
-              logJev(`BREAK LOOP: ${last4.join('→')} → try ${bestAlt}`,0);
-              jevChoice=bestAlt;
-              lastDirs.push(bestAlt);
-              stuckCount=0;
-            }
-          }
-        }
-
         pm.nd=[...DIR_V[jevChoice]];
         lastJevDir=jevChoice;
       }
