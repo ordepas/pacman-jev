@@ -350,7 +350,11 @@ function askJev(){
     if(nx<0)nx=C-1;if(nx>=C)nx-=C;
     let exits=0;
     for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
-    criteria[d]=`Go ${d}: ${exits} exits`;
+    // Ghost danger for this direction
+    let minGD=99;
+    ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<minGD)minGD=dd;}});
+    const danger=minGD<4?' DANGER!':' safe';
+    criteria[d]=`Go ${d}: ${exits} exits, nearest ghost: ${minGD}${danger}`;
   }
 
   const body={
@@ -361,12 +365,14 @@ function askJev(){
         type:'choice',
         instructions:`You are PAC-MAN on a ${C}x${R} grid. Choose ONE direction.
 
-KEY RULES:
-1. If BFS HINT shows a direction, strongly prefer it UNLESS a ghost (dist<3) blocks that path.
-2. FLEE from ghosts within 3 cells (not scared). Choose direction with most exits.
-3. If STUCK, move toward the quadrant with most dots (DOT DENSITY).
-4. Grid 5x5: P=you #=wall .=dot O=power G=ghost pen g=ghost exit.
-5. Left/right edges connect (tunnel wrap).`,
+CRITICAL RULES (in strict priority order):
+1. GHOST SAFETY: If ANY ghost (not scared) has dist<4, do NOT move toward it. Move AWAY. Choose the direction that MAXIMIZES distance from the nearest ghost AND has the most exit routes. This overrides ALL other rules.
+2. FOLLOW BFS HINT: If no ghost danger, follow the BFS HINT direction — it leads to the nearest dot.
+3. If STUCK (>8 ticks no dot), move toward quadrant with most dots (DOT DENSITY).
+4. Grid: P=you #=wall .=dot O=power G=ghost pen g=ghost exit.
+5. Left/right edges connect (tunnel).
+
+The BFS HINT is a suggestion. GHOST SAFETY is mandatory.`,
         criteria
       }
     }
