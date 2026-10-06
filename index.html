@@ -262,18 +262,20 @@ function findNearestDot(){
     .sort((a,b)=>a.dist-b.dist);
   for(const dot of sorted){
     const path=bfs(pm.gx,pm.gy,new Set([dot.gx+','+dot.gy]),false);
-    if(path&&path.length>1)return{dot,path,dir:path[1]};
+    if(path&&path.length>1)return{dot,path,next:path[1]};
   }
   return null;
 }
 function getBfsHint(){
-  if(bfsCache&&bfsTarget&&dots.some(d=>d.gx===bfsTarget[0]&&d.gy===bfsTarget[1])){
-    if(bfsCache.length>1&&bfsCache[1][0]===pm.gx&&bfsCache[1][1]===pm.gy)bfsCache.shift();
-    if(bfsCache.length>1)return bfsCache[1];
-  }
+  // Always recalculate fresh — cache causes stale paths after Pac-Man moves
   const result=findNearestDot();
-  if(result){bfsCache=result.path;bfsTarget=[result.dot.gx,result.dot.gy];return result.dir;}
-  return null;
+  if(!result)return null;
+  const next=result.next;
+  // Return direction vector, not absolute position
+  let dx=next[0]-pm.gx, dy=next[1]-pm.gy;
+  // Handle tunnel wrap
+  if(dx>1)dx=-1;else if(dx<-1)dx=1;
+  return[dx,dy];
 }
 
 // ── Build compact structured state ──
@@ -295,8 +297,8 @@ function buildState(){
     .sort((a,b)=>a.dist-b.dist)[0]||{dist:99};
 
   // BFS hint
-  const bfsDir=getBfsHint();
-  const bfsDirName=bfsDir?(bfsDir[1]<0?'up':bfsDir[1]>0?'down':bfsDir[0]<0?'left':'right'):null;
+  const bfsDir=getBfsHint(); // Returns direction vector [dx,dy]
+  const bfsDirName=bfsDir?DIR_K.find(k=>DIR_V[k][0]===bfsDir[0]&&DIR_V[k][1]===bfsDir[1]):null;
 
   // Power pellet
   const nearPow=powers.map(p=>({dist:Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy)}))
@@ -457,7 +459,7 @@ function askJev(){
     logJev('ERROR: '+e.message,1);
     // Fallback: BFS
     const bfsDir=getBfsHint();
-    if(bfsDir)pm.nd=[bfsDir[0]-pm.gx,bfsDir[1]-pm.gy];
+    if(bfsDir)pm.nd=bfsDir;
   }).finally(()=>{
     jevBusy=false;
   });
@@ -519,11 +521,10 @@ function decideMove(a,avail,ghostDangerPerDir){
 
   // ── PRIORITY 3: BFS to nearest dot (main behavior) ──
   if(!move){
-    const bfsDir=getBfsHint();
+    const bfsDir=getBfsHint(); // Returns direction vector [dx,dy]
     if(bfsDir){
-      const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
-      const nd=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
-      const dirName=DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]);
+      // Find which direction name this maps to
+      const dirName=DIR_K.find(k=>DIR_V[k][0]===bfsDir[0]&&DIR_V[k][1]===bfsDir[1]);
 
       if(dirName&&avail.includes(dirName)){
         // Check if BFS direction is safe (local check)
@@ -532,7 +533,7 @@ function decideMove(a,avail,ghostDangerPerDir){
         if(bfsGhostDist>=3){
           // BFS path is safe — use it
           strategy='COLECTAR';
-          move=nd;
+          move=bfsDir;
         }else if(isPosStuck){
           // BFS path blocked by ghost AND we're stuck — try alternative
           const otherDirs=avail.filter(d=>d!==dirName&&ghostDangerPerDir[d]>=3);
@@ -566,7 +567,7 @@ function decideMove(a,avail,ghostDangerPerDir){
         }else{
           // BFS path has ghost but not stuck yet — coast and hope ghost moves
           strategy='COLECTAR';
-          move=nd;
+          move=bfsDir;
         }
       }
     }
