@@ -251,9 +251,10 @@ function ghostAI(g,idx){
 // ═══════════════════════════════════════════════════════════
 
 let jevBusy=false, jevMs=0, jevCalls=0;
-let jevAnswers=null; // Last set of answers from JEV
+let jevAnswers=null;
 let stuckTicks=0, lastDotCount=0, lastDirs=[];
 let bfsCache=null, bfsTarget=null;
+let lastPosX=-1, lastPosY=-1, posStuckTicks=0;
 
 // ── Local BFS (fallback + hints) ──
 function findNearestDot(){
@@ -462,57 +463,49 @@ function askJev(){
   });
 }
 
-// ── Decision logic (CODE, not model) ──
+// ── Decision logic: BFS-first, local safety, JEV as advisor ──
 function decideMove(a,avail,ghostDangerPerDir){
   if(!avail.length)return null;
 
   const danger=a.ghost_danger?.noul||0;
-  const dangerLvl=a.danger_level?.score||0;
-  const shouldHunt=a.should_hunt?.noul||0;
-  const shouldPower=a.should_powerup?.noul||0;
-  const pathSafe=a.path_safe?.noul||0;
   const fleeDir=a.flee_dir?.choice;
   const collectDir=a.collect_dir?.choice;
   const collectConf=a.collect_dir?.confidence||0;
+  const pathSafe=a.path_safe?.noul||0;
 
-  // Anti-oscillation: detect A-B-A-B pattern
-  let isStuck=false;
+  // Position-based stuck detection
+  if(pm.gx===lastPosX&&pm.gy===lastPosY)posStuckTicks++;else{posStuckTicks=0;lastPosX=pm.gx;lastPosY=pm.gy;}
+  const isPosStuck=posStuckTicks>4;
+
+  // Anti-oscillation: detect direction alternation
   if(dots.length===lastDotCount)stuckTicks++;else{stuckTicks=0;lastDotCount=dots.length;}
-  lastDirs.push(aiStrategy);
-  if(lastDirs.length>8)lastDirs.shift();
-  if(lastDirs.length>=4){
-    const last4=lastDirs.slice(-4);
-    isStuck=(last4[0]===last4[2]&&last4[1]===last4[3]&&last4[0]!==last4[1])&&stuckTicks>6;
-  }
 
   let strategy='?';
   let move=null;
 
-  // ── PRIORITY 1: Flee if real danger (ghost dist<4 locally computed) ──
+  // ── PRIORITY 1: Local ghost avoidance (always runs, no JEV dependency) ──
   const minLocalGhost=Math.min(...Object.values(ghostDangerPerDir));
-  if(minLocalGhost<4){
-    // Local flee: pick direction with most exits AND farthest from ghost
+  if(minLocalGhost<3){
     let bestDir=null,bestScore=-1;
     for(const d of avail){
       const gd=ghostDangerPerDir[d];
-      const exits=0;for(const dk of DIR_K){const v2=DIR_V[dk];const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];if(nx<0)nx=C-1;if(nx>=C)nx-=C;if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
-      const sc=gd*15+exits*5;
+      let exits=0;
+      const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
+      if(nx<0)nx=C-1;if(nx>=C)nx-=C;
+      for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
+      const sc=gd*20+exits*3;
       if(sc>bestScore){bestScore=sc;bestDir=d;}
     }
-    // If JEV also says flee AND its direction is safe, prefer JEV's choice
-    if(danger>0.5&&fleeDir&&avail.includes(fleeDir)&&ghostDangerPerDir[fleeDir]>=minLocalGhost+1){
-      strategy='HUIR-J';
-      move=DIR_V[fleeDir];
-    }else if(bestDir){
+    if(bestDir){
       strategy=minLocalGhost<2?'HUIR!':'HUIR';
       move=DIR_V[bestDir];
     }
   }
 
-  // ── PRIORITY 2: Hunt scared ghost (only if safe) ──
-  if(!move&&shouldHunt>0.6&&minLocalGhost>=4){
+  // ── PRIORITY 2: Hunt scared ghost (only if adjacent and safe) ──
+  if(!move){
     const nearScared=ghosts.filter(g=>g&&!g.dead&&g.scared&&Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<=1);
-    if(nearScared.length){
+    if(nearScared.length&&minLocalGhost>=4){
       const g=nearScared[0];
       const dx=g.gx-pm.gx,dy=g.gy-pm.gy;
       const nd=[dx===-20?1:dx===20?-1:dx,dy];
@@ -524,93 +517,84 @@ function decideMove(a,avail,ghostDangerPerDir){
     }
   }
 
-  // ── PRIORITY 3: Power pellet (if stuck and safe) ──
-  if(!move&&shouldPower>0.5&&stuckTicks>6&&minLocalGhost>=4){
-    const nearPow=powers.map(p=>({...p,dist:Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy)}))
-      .sort((a,b)=>a.dist-b.dist)[0];
-    if(nearPow&&nearPow.dist<10){
-      const path=bfs(pm.gx,pm.gy,new Set([nearPow.gx+','+nearPow.gy]),false);
-      if(path&&path.length>1){
-        strategy='POWER';
-        const n=path[1];
-        move=[(n[0]-pm.gx+C)%C===C-1?1:(n[0]-pm.gx+C)%C===1?-1:n[0]-pm.gx,n[1]-pm.gy];
+  // ── PRIORITY 3: BFS to nearest dot (main behavior) ──
+  if(!move){
+    const bfsDir=getBfsHint();
+    if(bfsDir){
+      const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
+      const nd=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
+      const dirName=DIR_K.find(k=>DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1]);
+
+      if(dirName&&avail.includes(dirName)){
+        // Check if BFS direction is safe (local check)
+        const bfsGhostDist=ghostDangerPerDir[dirName]||99;
+
+        if(bfsGhostDist>=3){
+          // BFS path is safe — use it
+          strategy='COLECTAR';
+          move=nd;
+        }else if(isPosStuck){
+          // BFS path blocked by ghost AND we're stuck — try alternative
+          const otherDirs=avail.filter(d=>d!==dirName&&ghostDangerPerDir[d]>=3);
+          if(otherDirs.length){
+            // Pick the one with most dots in that direction
+            let bestAlt=otherDirs[0],bestDotScore=-1;
+            for(const d of otherDirs){
+              const v=DIR_V[d];let nx=pm.gx+v[0]*2,ny=pm.gy+v[1]*2;
+              if(nx<0)nx+=C;if(nx>=C)nx-=C;
+              let dotCount=0;
+              for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+                let cx2=nx+dx,cy2=ny+dy;
+                if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
+                if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
+              }
+              if(dotCount>bestDotScore){bestDotScore=dotCount;bestAlt=d;}
+            }
+            strategy='ALT';
+            move=DIR_V[bestAlt];
+            posStuckTicks=0;
+          }else{
+            // All directions have ghosts — just flee
+            let bestFlee=avail[0],bestFleeScore=-1;
+            for(const d of avail){
+              const sc=(ghostDangerPerDir[d]||0)*10;
+              if(sc>bestFleeScore){bestFleeScore=sc;bestFlee=d;}
+            }
+            strategy='FLEE';
+            move=DIR_V[bestFlee];
+          }
+        }else{
+          // BFS path has ghost but not stuck yet — coast and hope ghost moves
+          strategy='COLECTAR';
+          move=nd;
+        }
       }
     }
   }
 
-  // ── PRIORITY 4: Collect dots (main behavior with BFS integration) ──
+  // ── PRIORITY 4: No BFS available — use JEV's collect direction ──
+  if(!move&&collectDir&&avail.includes(collectDir)){
+    strategy='JEV';
+    move=DIR_V[collectDir];
+  }
+
+  // ── PRIORITY 5: Last resort — explore ──
   if(!move){
-    // STRATEGY: BFS hint is the default. JEV's collect_dir overrides only if confident.
-    const bfsDir=getBfsHint();
-    const bfsDirName=bfsDir?(DIR_K.find(k=>{
-      const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
-      const nd=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
-      return DIR_V[k][0]===nd[0]&&DIR_V[k][1]===nd[1];
-    })):null;
-
-    // If stuck, try to break the loop
-    if(isStuck){
-      // Pick a direction NOT in the oscillation pattern
-      const oscDirs=new Set(lastDirs.slice(-4));
-      const otherDirs=avail.filter(d=>!oscDirs.has(d));
-      if(otherDirs.length){
-        // Pick the one with most dots nearby
-        let bestAlt=otherDirs[0],bestDotScore=-1;
-        for(const d of otherDirs){
-          const v=DIR_V[d];let nx=pm.gx+v[0]*3,ny=pm.gy+v[1]*3;
-          if(nx<0)nx+=C;if(nx>=C)nx-=C;
-          let dotCount=0;
-          for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
-            let cx2=nx+dx,cy2=ny+dy;
-            if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
-            if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
-          }
-          if(dotCount>bestDotScore){bestDotScore=dotCount;bestAlt=d;}
-        }
-        strategy='BREAK';
-        move=DIR_V[bestAlt];
-        lastDirs=[];stuckTicks=0;
+    strategy='EXPLORE';
+    let best=avail[0],bestScore=-1;
+    for(const d of avail){
+      const v=DIR_V[d];let nx=pm.gx+v[0]*2,ny=pm.gy+v[1]*2;
+      if(nx<0)nx+=C;if(nx>=C)nx-=C;
+      let dotCount=0;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+        let cx2=nx+dx,cy2=ny+dy;
+        if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
+        if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
       }
+      const sc=dotCount*10+(ghostDangerPerDir[d]>4?5:0);
+      if(sc>bestScore){bestScore=sc;best=d;}
     }
-
-    // Normal collection: prefer BFS, use JEV if confident and path is safe
-    if(!move){
-      if(bfsDirName&&avail.includes(bfsDirName)){
-        // BFS path available — use it unless JEV says it's unsafe
-        if(pathSafe<0.3&&collectDir&&avail.includes(collectDir)&&collectConf>0.5){
-          // BFS path is unsafe, JEV has a confident alternative
-          strategy='COLECT-J';
-          move=DIR_V[collectDir];
-        }else{
-          // BFS path is safe (or JEV has no better idea)
-          strategy='COLECTAR';
-          const dx=bfsDir[0]-pm.gx,dy=bfsDir[1]-pm.gy;
-          move=[(dx+C)%C===C-1?1:(dx+C)%C===1?-1:dx,dy];
-        }
-      }else if(collectDir&&avail.includes(collectDir)){
-        // No BFS hint, use JEV's direction
-        strategy='COLECT-J';
-        move=DIR_V[collectDir];
-      }else{
-        // Last resort: pick direction with most dots nearby
-        strategy='EXPLORE';
-        let best=avail[0],bestScore=-1;
-        for(const d of avail){
-          const v=DIR_V[d];let nx=pm.gx+v[0]*2,ny=pm.gy+v[1]*2;
-          if(nx<0)nx+=C;if(nx>=C)nx-=C;
-          let dotCount=0;
-          for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-            let cx2=nx+dx,cy2=ny+dy;
-            if(cx2<0)cx2+=C;if(cx2>=C)cx2-=C;
-            if(dots.some(dd=>dd.gx===cx2&&dd.gy===cy2))dotCount++;
-          }
-          const gd=ghostDangerPerDir[d]||99;
-          const sc=dotCount*10+(gd>4?5:0);
-          if(sc>bestScore){bestScore=sc;best=d;}
-        }
-        move=DIR_V[best];
-      }
-    }
+    move=DIR_V[best];
   }
 
   aiStrategy=strategy;
