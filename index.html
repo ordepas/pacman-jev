@@ -248,8 +248,8 @@ function ghostAI(g,idx){
 }
 
 // ═══════════════════════════════════════════════════════════
-//  JEV — UNICO CEREBRO
-//  Sin AI local. JEV decide cada movimiento.
+//  JEV — UNICO CEREBRO (Full Maze View)
+//  JEV ve el laberinto COMPLETO como texto.
 // ═══════════════════════════════════════════════════════════
 
 let jevBusy=false, jevMs=0, jevCalls=0;
@@ -258,38 +258,68 @@ let jevConfidence=0;
 let jevChoice='?';
 let ticksSinceLastJev=0;
 
+function buildFullMaze(){
+  // Build full R x C text grid with all entities
+  let rows=[];
+  for(let r=0;r<R;r++){
+    let row='';
+    for(let c=0;c<C;c++){
+      // Check if Pac-Man is here
+      if(pm.gx===c&&pm.gy===r){row+='P';continue;}
+      // Check if a ghost is here
+      let ghostHere=null;
+      for(let i=0;i<ghosts.length;i++){
+        const g=ghosts[i];
+        if(g&&!g.dead&&g.gx===c&&g.gy===r){ghostHere=i;break;}
+      }
+      if(ghostHere!==null){
+        row+=ghosts[ghostHere].scared?'s':('RBCO'[ghostHere]); // R=red,B=pink,C=cyan,O=orange
+        continue;
+      }
+      // Maze structure
+      const v=G[r][c];
+      if(v===1)row+='#';
+      else if(v===9)row+=' '; // void
+      else if(v===2)row+='G'; // ghost pen interior
+      else if(v===6)row+='g'; // ghost pen exit
+      else if(v===3)row+='T'; // tunnel
+      else if(powers.some(p=>p.gx===c&&p.gy===r))row+='O'; // power pellet
+      else if(dots.some(d=>d.gx===c&&d.gy===r))row+='.'; // dot
+      else row+=' '; // empty walkable
+    }
+    rows.push(row);
+  }
+  return rows.join('\n');
+}
+
 function buildJevState(){
-  const gInfo=ghosts.map((g,i)=>{
-    if(!g||g.dead)return null;
-    const dist=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);
-    const dir=g.d?(g.d[1]<0?'U':g.d[1]>0?'D':g.d[0]<0?'L':'R'):'?';
-    return`${g.scared?'s':''}${dir}d${dist}`;
-  }).filter(Boolean).sort().join(' ');
-
-  const nearDots=dots.map(d=>({x:d.gx,y:d.gy,d:Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy)}))
-    .sort((a,b)=>a.d-b.d).slice(0,3).map(d=>`(${d.x},${d.y})${d.d}`).join(' ');
-
+  const maze=buildFullMaze();
   const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
 
-  // 5x5 grid view
-  let hood='';
-  for(let dy=-2;dy<=2;dy++){
-    for(let dx=-2;dx<=2;dx++){
-      let nx=pm.gx+dx,ny=pm.gy+dy;
-      if(nx<0)nx+=C;if(nx>=C)nx-=C;
-      const cell=G[ny]?.[nx];
-      if(dx===0&&dy===0)hood+='P';
-      else if(cell===1||cell===9)hood+='#';
-      else if(cell===2)hood+='G';
-      else if(cell===6)hood+='g';
-      else if(powers.some(p=>p.gx===nx&&p.gy===ny))hood+='O';
-      else if(dots.some(d=>d.gx===nx&&d.gy===ny))hood+='.';
-      else hood+=' ';
-    }
-    if(dy<2)hood+='|';
-  }
+  // Ghost summary
+  const gSummary=ghosts.map((g,i)=>{
+    if(!g||g.dead)return null;
+    const dist=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);
+    const dir=g.d?(g.d[1]<0?'up':g.d[1]>0?'down':g.d[0]<0?'left':'right'):'?';
+    const name=['Red(R)','Pink(B)','Cyan(C)','Orange(O)'][i];
+    return`${name} at(${g.gx},${g.gy}) going ${dir} dist=${dist}${g.scared?' SCARED':''}`;
+  }).filter(Boolean).join('\n');
 
-  return`P(${pm.gx},${pm.gy}) GHOSTS:[${gInfo}] DOTS:[${nearDots}] POW:[${powers.map(p=>`(${p.gx},${p.gy})`).join(',')||'none'}] GO:[${avail}] GRID:${hood} Lv${level} Sc${score} Left${dots.length+powers.length}`;
+  return`MAZE (${C}x${R}):
+${maze}
+
+LEGEND: P=Pac-Man(you) #=wall .=dot O=power pellet
+R=Red ghost B=Pink ghost C=Cyan ghost O=Orange ghost s=scared ghost
+G=ghost pen g=ghost pen exit T=tunnel(left↔right edges connect)
+Space=empty walkable
+
+GHOSTS:
+${gSummary}
+
+YOU: Pac-Man at (${pm.gx},${pm.gy}) facing ${pm.d[1]<0?'up':pm.d[1]>0?'down':pm.d[0]<0?'left':pm.d[0]>0?'right':'none'}
+SCORE: ${score} LIVES: ${lives} LEVEL: ${level}
+DOTS REMAINING: ${dots.length+powers.length}/${totalD}
+AVAILABLE MOVES: ${avail.join(', ')}`;
 }
 
 function askJev(){
@@ -305,12 +335,10 @@ function askJev(){
   const criteria={};
   for(const d of avail){
     const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-    if(nx<0)nx=C-1;if(nx>=C)nx-=0;
+    if(nx<0)nx=C-1;if(nx>=C)nx-=C;
     let routes=0;
     for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
-    let nearG=99;ghosts.forEach(g=>{if(g&&!g.dead){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<nearG)nearG=dd;}});
-    let hasDot=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?' dot':'';
-    criteria[d]=`${d}→(${nx},${ny}) exits:${routes} ghost:${nearG}${hasDot}`;
+    criteria[d]=`Move ${d} — ${routes} exit routes from (${nx},${ny})`;
   }
 
   const body={
@@ -319,21 +347,27 @@ function askJev(){
     questions:{
       dir:{
         type:'choice',
-        instructions:`You are PAC-MAN on a ${C}x${R} grid. P=you, #=wall, .=dot, O=power, G=ghost. Grid rows separated by |. Left/right edges connect (tunnel).
+        instructions:`You are controlling PAC-MAN. You can see the FULL maze above.
 
-Choose ONE direction. Priority:
-1. FLEE if ghost within 3 cells (NOT scared). Maximize distance + exits.
-2. COLLECT nearest dot (.) — dots win levels.
-3. Chase scared ghost ONLY if adjacent.
-4. Avoid dead-ends (exits:0-1) when ghosts nearby.
-5. Use tunnels for escape.`,
+Choose the BEST direction to move RIGHT NOW.
+
+STRATEGY:
+1. SURVIVAL FIRST: If a ghost (R/B/C/O) is within 3 cells and NOT scared, MOVE AWAY. Prioritize directions with more exit routes.
+2. COLLECT DOTS: Dots (.) are the PRIMARY objective. Plan a path through dot-rich areas.
+3. TUNNEL ESCAPE: If cornered, use tunnels (T at edges) — they connect left↔right sides.
+4. HUNT SCARED: Only chase scared ghosts (s) if they are exactly 1 cell away.
+5. POWER PELLETS (O): Only go for them if a ghost is actively blocking your dot path.
+6. AVOID DEAD ENDS: Never enter a corridor with 1 exit when a ghost is nearby.
+7. PLAN AHEAD: Look at the full maze to find clusters of dots and plan efficient routes.
+
+The maze wraps horizontally — left edge connects to right edge at row ${10}.`,
         criteria
       }
     }
   };
 
   const t0=performance.now();
-  document.getElementById('jev-thinking').textContent='JEV pensando...';
+  document.getElementById('jev-thinking').textContent='JEV analizando mapa completo...';
 
   fetch('http://localhost:4000/api/jev',{
     method:'POST',
