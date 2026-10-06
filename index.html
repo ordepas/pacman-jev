@@ -2,29 +2,25 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>PAC-MAN x JEV</title>
+<title>PAC-MAN x JEV — Solo Brain</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0a0a0a;color:#eee;font-family:'Courier New',monospace;display:flex;justify-content:center;align-items:center;min-height:100vh;overflow:hidden}
 #app{display:flex;gap:20px;align-items:flex-start}
 #panel{width:310px;background:linear-gradient(180deg,#111 0%,#0d0d0d 100%);border:1px solid #1a1a1a;border-radius:14px;padding:22px;flex-shrink:0;box-shadow:0 0 30px rgba(0,0,0,.5)}
 #panel h1{font-size:24px;color:#ffe033;text-align:center;letter-spacing:6px;text-shadow:0 0 20px rgba(255,224,51,.3)}
-#panel .sub{font-size:10px;color:#555;text-align:center;letter-spacing:4px;margin:2px 0 18px}
+#panel .sub{font-size:10px;color:#F72585;text-align:center;letter-spacing:4px;margin:2px 0 18px}
 .sec{background:rgba(255,255,255,.03);border:1px solid #1a1a1a;border-radius:10px;padding:16px;margin-bottom:12px}
 .sec h3{font-size:10px;color:#4CC9F0;text-transform:uppercase;letter-spacing:3px;margin-bottom:12px;display:flex;align-items:center;gap:6px}
 .sec h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:#4CC9F0}
 .btn{display:block;width:100%;padding:11px;border:none;border-radius:8px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:1px;transition:all .15s;margin-bottom:6px}
-.btn-mode{background:#1a1a1a;color:#777;border:1px solid #252525}
-.btn-mode.active{color:#000;border-color:transparent}
-.btn-mode.active.mode-manual{background:linear-gradient(135deg,#4CC9F0,#38bdf8)}
-.btn-mode.active.mode-jev{background:linear-gradient(135deg,#F72585,#ec4899)}
 .btn-go{background:linear-gradient(135deg,#ffe033,#facc15);color:#000;font-size:14px;letter-spacing:3px;box-shadow:0 4px 15px rgba(255,224,51,.2)}
 .btn-go:hover{box-shadow:0 4px 25px rgba(255,224,51,.4);transform:translateY(-1px)}
 .btn-go:disabled{background:#222;color:#444;box-shadow:none;transform:none}
 .stat{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
 .stat:last-child{border:none}
 .stat .k{color:#666}.stat .v{color:#ffe033;font-weight:700}
-#jev-box{display:none}
+#jev-box .sec{border-color:#F72585;background:rgba(247,37,133,.03)}
 .dir-bars{margin:10px 0 4px}
 .dbar{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:12px}
 .dbar .lbl{width:16px;text-align:center;color:#888;font-weight:700;font-size:11px}
@@ -38,6 +34,7 @@ body{background:#0a0a0a;color:#eee;font-family:'Courier New',monospace;display:f
 #jev-ms{font-size:28px;font-weight:900;background:linear-gradient(135deg,#4CC9F0,#F72585);-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;margin:10px 0 2px}
 #jev-ms small{font-size:11px;-webkit-text-fill-color:#555}
 #jev-act{font-size:11px;color:#F72585;text-align:center;min-height:16px;margin-top:4px;letter-spacing:1px}
+#jev-thinking{font-size:10px;color:#4CC9F0;text-align:center;min-height:14px;margin-top:4px}
 #jev-log{max-height:120px;overflow-y:auto;font-size:10px;color:#555;margin-top:8px;border-top:1px solid #1a1a1a;padding-top:8px;line-height:1.8}
 #jev-log .t{color:#4CC9F0}#jev-log .e{color:#F72585}#jev-log .ok{color:#ffe033}
 #gw{position:relative;background:#000;border:2px solid #1a1a1a;border-radius:14px;overflow:hidden;box-shadow:0 0 40px rgba(0,0,0,.6)}
@@ -53,12 +50,7 @@ canvas{display:block}
 <div id="app">
   <div id="panel">
     <h1>PAC-MAN</h1>
-    <div class="sub">J E V &nbsp; E D I T I O N</div>
-    <div class="sec">
-      <h3>Modo de Juego</h3>
-      <button class="btn btn-mode mode-manual active" onclick="setMode('manual')">&#9654; MANUAL &mdash; Flechas del Teclado</button>
-      <button class="btn btn-mode mode-jev" onclick="setMode('jev')">&#9889; JEV &mdash; IA en Tiempo Real</button>
-    </div>
+    <div class="sub">J E V &nbsp; S O L O &nbsp; B R A I N</div>
     <div class="sec">
       <button class="btn btn-go" id="btn-go" onclick="startGame()">&#9654; &nbsp; I N I C I A R</button>
     </div>
@@ -69,11 +61,12 @@ canvas{display:block}
       <div class="stat"><span class="k">Nivel</span><span class="v" id="s-lv2">1</span></div>
       <div class="stat"><span class="k">Dificultad</span><span class="v" id="s-df" style="font-size:11px;color:#76ff03">Normal</span></div>
       <div class="stat"><span class="k">Dots</span><span class="v" id="s-dt">0</span></div>
-      <div class="stat"><span class="k">Estrategia</span><span class="v" id="s-st" style="font-size:11px">-</span></div>
+      <div class="stat"><span class="k">JEV Calls</span><span class="v" id="s-calls">0</span></div>
     </div>
     <div class="sec" id="jev-box">
-      <h3>Decision JEV en Tiempo Real</h3>
+      <h3>Cerebro JEV</h3>
       <div id="jev-ms">-- <small>ms</small></div>
+      <div id="jev-thinking">Esperando decision...</div>
       <div id="jev-act"></div>
       <div class="dir-bars">
         <div class="dbar du"><span class="lbl">&#9650;</span><div class="bg"><div class="fill" id="bu" style="width:0%"></div></div><span class="pct" id="pu">0%</span></div>
@@ -88,12 +81,19 @@ canvas{display:block}
     <canvas id="gc"></canvas>
     <div id="ov">
       <h2>PAC-MAN</h2>
-      <p>Selecciona un modo y presiona INICIAR</p>
+      <p>JEV es el unico cerebro. Presiona INICIAR</p>
     </div>
   </div>
 </div>
 <script>
+// ═══════════════════════════════════════════════════════════
+//  PAC-MAN x JEV — Solo Brain Edition
+//  JEV (TypeSafe System One) es el UNICO cerebro.
+//  No hay AI local. JEV decide cada movimiento.
+// ═══════════════════════════════════════════════════════════
+
 window.addEventListener('error',function(e){console.error('ERR:',e.message,e.lineno);});
+
 const C=21,R=22,SZ=28,W=C*SZ,H=R*SZ;
 const DIR_V={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]};
 const DIR_K=['up','down','left','right'];
@@ -110,6 +110,7 @@ if(!cx.roundRect){CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,
   this.lineTo(x,y+r.tl);this.quadraticCurveTo(x,y,x+r.tl,y);this.closePath();};}
 document.getElementById('gw').style.width=W+'px';
 
+// ═══ MAZE ═══
 const G=[
 [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
 [1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1],
@@ -136,11 +137,11 @@ const G=[
 ];
 
 let walls=new Set(),dots=[],powers=[];
-let mode='manual',running=false,score=0,lives=3,level=1,totalD=0;
-let jevBusy=false,jevMs=0,pacAnim=0,aiStrategy='-';
+let running=false,score=0,lives=3,level=1,totalD=0;
 let scaredTimer=null;
 const GSTARTS=[[9,9],[10,9],[11,9],[10,10]];
 
+// ═══ BFS ═══
 function bfs(sx,sy,targets,isGhost){
   const q=[[sx,sy]],visited=new Set(),parent=new Map();
   const key=(x,y)=>x+','+y;
@@ -165,10 +166,12 @@ function bfs(sx,sy,targets,isGhost){
   return null;
 }
 
+// ═══ PAC-MAN ═══
 const pm={gx:10,gy:16,d:[0,0],nd:[0,0],mouth:0,
   px(){return this.gx*SZ+SZ/2},py(){return this.gy*SZ+SZ/2},
   reset(){this.gx=10;this.gy=16;this.d=[0,0];this.nd=[0,0];this.mouth=0}};
 
+// ═══ GHOSTS ═══
 let ghosts=[];
 function mkG(i){const s=GSTARTS[i];return{gx:s[0],gy:s[1],d:[0,-1],color:COL.ghosts[i],
   scared:false,dead:0,_prevGx:s[0],_prevGy:s[1],
@@ -203,6 +206,7 @@ function canP(gx,gy,d,forGhost){
 }
 function wrapX(gx){if(gx<0)return C-1;if(gx>=C)return 0;return gx;}
 
+// ═══ GHOST AI (unchanged from original) ═══
 function ghostAI(g,idx){
   if(!g||!g.d||g.d.length<2)return;
   if(g.dead>0){g.dead--;if(g.dead===0){g.gx=10;g.gy=9;g.scared=false;}return;}
@@ -243,180 +247,156 @@ function ghostAI(g,idx){
   else if(inPen&&G[g.gy]?.[g.gx]===2){g.d=[0,-1];}
 }
 
-// ═══ LOCAL AI - Survival-Focused ═══
-let cachedPath=null,cachedTarget=null,stuckTicks=0,lastDotCount=0;
-let blacklistedDots=new Map(),patienceTicks=0;
+// ═══════════════════════════════════════════════════════════
+//  JEV — UNICO CEREBRO
+//  Sin AI local. JEV decide cada movimiento.
+// ═══════════════════════════════════════════════════════════
 
-function escapeRoutes(gx,gy){
-  let r=0;for(const dk of DIR_K){const v=DIR_V[dk];if(!isW(gx+v[0],gy+v[1],false))r++;}return r;
-}
-function ghostDistAt(gx,gy,pred){
-  let min=99;
-  ghosts.forEach(g=>{
-    if(!g||g.dead)return;
-    const d1=Math.abs(gx-g.gx)+Math.abs(gy-g.gy);if(d1<min)min=d1;
-    if(pred>0&&g.d){
-      const d2=Math.abs(gx-wrapX(g.gx+g.d[0]*pred))+Math.abs(gy-(g.gy+g.d[1]*pred));
-      if(d2<min)min=d2;
-    }
+let jevBusy=false, jevMs=0, jevCalls=0;
+let lastJevDir=null; // Mientras JEV piensa, mantener la ultima direccion
+let jevConfidence=0;
+let jevChoice='?';
+
+function buildJevState(){
+  // Ghosts info — nearest 4 with distances
+  const gInfo=ghosts.map((g,i)=>{
+    if(!g||g.dead)return null;
+    const dist=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);
+    const dir=g.d?(g.d[1]<0?'up':g.d[1]>0?'down':g.d[0]<0?'left':'right'):'?';
+    return{i,dist,dir,scared:g.scared,x:g.gx,y:g.gy};
+  }).filter(Boolean).sort((a,b)=>a.dist-b.dist);
+
+  // Nearest dots (top 8)
+  const nearDots=dots.map(d=>{
+    const dist=Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy);
+    return{x:d.gx,y:d.gy,dist};
+  }).sort((a,b)=>a.dist-b.dist).slice(0,8);
+
+  // Power pellets
+  const powInfo=powers.map(p=>{
+    const dist=Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy);
+    return{x:p.gx,y:p.gy,dist};
   });
-  return min;
-}
 
-function localAI(){
+  // Available directions
   const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
-  if(!avail.length)return null;
 
-  // Stuck detection
-  if(dots.length===lastDotCount){stuckTicks++;}else{stuckTicks=0;lastDotCount=dots.length;}
-  if(stuckTicks>15){cachedPath=null;cachedTarget=null;stuckTicks=0;}
-  for(const [k] of blacklistedDots){const [bx,by]=k.split(',').map(Number);if(!dots.some(d=>d.gx===bx&&d.gy===by))blacklistedDots.delete(k);}
-
-  // Ghost distance (current position only)
-  let minGDist=99;
-  ghosts.forEach(g=>{if(!g||g.dead)return;const d=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);if(d<minGDist)minGDist=d;});
-  const allScared=ghosts.every(g=>!g||g.dead||g.scared);
-
-  // CRITICAL: ghost next to us - flee
-  if(minGDist<2&&!allScared){
-    aiStrategy='HUIR!';
-    let bestD=avail[0],bestS=-999;
-    for(const d of avail){
-      const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-      if(nx<0)nx=C-1;if(nx>=C)nx=0;
-      let gd=99;ghosts.forEach(g=>{if(!g||g.dead)return;const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;});
-      let routes=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
-      const sc=gd*15+routes*8;if(sc>bestS){bestS=sc;bestD=d;}
-    }
-    cachedPath=null;return DIR_V[bestD];
-  }
-
-  // DANGER: ghost nearby - move to safer position
-  if(minGDist<3.5&&!allScared){
-    aiStrategy='HUIR';
-    let bestD=avail[0],bestS=-999;
-    for(const d of avail){
-      const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-      if(nx<0)nx=C-1;if(nx>=C)nx=0;
-      let gd=99;ghosts.forEach(g=>{if(!g||g.dead||g.scared)return;const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;});
-      let routes=0;for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
-      const hd=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?8:0;
-      const sc=gd*10+routes*5+hd;if(sc>bestS){bestS=sc;bestD=d;}
-    }
-    cachedPath=null;return DIR_V[bestD];
-  }
-
-  // POWER-RUN: stuck + ghost blocking + pellet available
-  let nearPow=null,nearPowD=99;
-  for(const p of powers){const d=Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy);if(d<nearPowD){nearPowD=d;nearPow=p;}}
-  let activeBlock=false;
-  ghosts.forEach(g=>{if(!g||g.dead||g.scared)return;if(Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<6)activeBlock=true;});
-  if(stuckTicks>12&&nearPow&&nearPowD<8&&activeBlock&&!allScared){
-    aiStrategy='POWER-RUN';
-    const path=bfs(pm.gx,pm.gy,new Set([nearPow.gx+','+nearPow.gy]),false);
-    if(path&&path.length>1){cachedPath=null;stuckTicks=0;const n=path[1];return[(n[0]-pm.gx+C)%C===C-1?1:(n[0]-pm.gx+C)%C===1?-1:n[0]-pm.gx,n[1]-pm.gy];}
-  }
-
-  // CAZAR: scared ghost exactly 1 step away
-  if(allScared){
-    for(const g of ghosts){
-      if(!g||g.dead||!g.scared)continue;
-      if(Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy)<=1){
-        const dx=g.gx-pm.gx,dy=g.gy-pm.gy;
-        const nd=[dx===-20?1:dx===20?-1:dx,dy];
-        if(canP(pm.gx,pm.gy,nd,false)){aiStrategy='CAZAR';cachedPath=null;return nd;}
-      }
-    }
-  }
-
-  // COLECTAR: dots first
-  aiStrategy='COLECTAR';
-  if(cachedPath&&cachedTarget){
-    if(!dots.some(d=>d.gx===cachedTarget[0]&&d.gy===cachedTarget[1])||cachedPath.length<2){cachedPath=null;cachedTarget=null;}
-    else{const n=cachedPath[1];if(n&&n[0]===pm.gx&&n[1]===pm.gy)cachedPath.shift();}
-  }
-
-  if(!cachedPath||cachedPath.length<2){
-    const desperate=dots.length<=8;
-    const avail2=dots.filter(d=>{if(desperate)return true;const k=d.gx+','+d.gy;return!blacklistedDots.has(k)||blacklistedDots.get(k)<3;});
-    if(!avail2.length)return null;
-    const sorted=[...avail2].sort((a,b)=>{
-      const da=Math.abs(a.gx-pm.gx)+Math.abs(a.gy-pm.gy);
-      const db=Math.abs(b.gx-pm.gx)+Math.abs(b.gy-pm.gy);
-      let ga=99,gb=99;
-      ghosts.forEach(g=>{if(!g||g.dead||g.scared)return;const d1=Math.abs(a.gx-g.gx)+Math.abs(a.gy-g.gy);const d2=Math.abs(b.gx-g.gx)+Math.abs(b.gy-g.gy);if(d1<ga)ga=d1;if(d2<gb)gb=d2;});
-      return(da+(ga<3?20:0))-(db+(gb<3?20:0));
-    }).slice(0,15);
-    for(const dot of sorted){
-      const path=bfs(pm.gx,pm.gy,new Set([dot.gx+','+dot.gy]),false);
-      if(path&&path.length>1){cachedPath=path;cachedTarget=[dot.gx,dot.gy];break;}
-    }
-  }
-
-  if(cachedPath&&cachedPath.length>1){
-    const next=cachedPath[1];
-    const dx=next[0]-pm.gx,dy=next[1]-pm.gy;
-    const nd=[dx===-20?1:dx===20?-1:dx,dy];
-    // Avoid power pellet if no active ghost nearby
-    const hasPow=powers.some(p=>p.gx===next[0]&&p.gy===next[1]);
-    if(hasPow&&minGDist>6&&!activeBlock&&cachedPath.length>3){
-      let altD=null,altS=-999;
-      for(const d of avail){
-        const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
-        if(nx===next[0]&&ny===next[1])continue;if(isW(nx,ny,false))continue;
-        let gd=99;ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;}});
-        const hd=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?15:0;
-        const sc=gd*5+hd;if(sc>altS){altS=sc;altD=d;}
-      }
-      if(altD){cachedPath=null;return DIR_V[altD];}
-    }
-    return nd;
-  }
-
-  // Fallback: explore
-  aiStrategy='EXPLORAR';
-  let bestD=avail[0],bestS=-999;
+  // Escape routes per direction
+  const escRoutes={};
   for(const d of avail){
     const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
     if(nx<0)nx=C-1;if(nx>=C)nx=0;
-    let gd=99;ghosts.forEach(g=>{if(g&&!g.dead&&!g.scared){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<gd)gd=dd;}});
-    const hd=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?15:0;
-    const sc=gd*8+hd;if(sc>bestS){bestS=sc;bestD=d;}
+    let routes=0;
+    for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
+    escRoutes[d]=routes;
   }
-  return DIR_V[bestD];
+
+  return{
+    pacman:{x:pm.gx,y:pm.gy,dir:pm.d[1]<0?'up':pm.d[1]>0?'down':pm.d[0]<0?'left':pm.d[0]>0?'right':'none'},
+    ghosts:gInfo,
+    nearestDots:nearDots,
+    powerPellets:powInfo,
+    availableDirections:avail,
+    escapeRoutes:escRoutes,
+    score,lives,level,
+    dotsRemaining:dots.length+powers.length,
+    totalDots:totalD,
+    percentComplete:Math.round((1-(dots.length+powers.length)/totalD)*100),
+    allGhostsScared:gInfo.every(g=>g.scared),
+    mazeSize:`${C}x${R}`
+  };
 }
 
-// ═══ JEV OVERLAY ═══
-let lastJevDir=null;
 function askJev(){
+  if(jevBusy)return;
   jevBusy=true;
-  const nearGhost=ghosts.reduce((b,g,i)=>{if(!g||g.dead)return b;const d=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);return d<b.dist?{idx:i,dist:d,scared:g.scared}:b;},{idx:-1,dist:999,scared:false});
-  const nearDot=dots.reduce((b,d)=>{const dist=Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy);return dist<b.dist?{gx:d.gx,gy:d.gy,dist}:b;},{dist:999,gx:0,gy:0});
-  const nearPower=powers.reduce((b,p)=>{const dist=Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy);return dist<b.dist?{gx:p.gx,gy:p.gy,dist}:b;},{dist:999,gx:0,gy:0});
-  const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
-  const state=`PAC-MAN: pos=(${pm.gx},${pm.gy}) strat=${aiStrategy}. Ghost: dist=${nearGhost.dist} scared=${nearGhost.scared}. Dot: dist=${nearDot.dist}. Power: dist=${nearPower.dist}. Left: ${dots.length}/${totalD}. Score=${score} Lives=${lives} Lv=${level}.`;
-  const crit={};
-  for(const d of avail)crit[d]=`Dir ${d.toUpperCase()}: ${aiStrategy}`;
+  jevCalls++;
+
+  const state=buildJevState();
+  const avail=state.availableDirections;
+  if(!avail.length){jevBusy=false;return;}
+
+  // Build criteria dynamically — only available directions
+  const criteria={};
+  for(const d of avail){
+    const esc=state.escapeRoutes[d]||0;
+    criteria[d]=`Move ${d.toUpperCase()}. Escape routes from there: ${esc}.`;
+  }
+
+  const body={
+    state:JSON.stringify(state),
+    model:'jev-latest',
+    questions:{
+      dir:{
+        type:'choice',
+        instructions:`You are controlling PAC-MAN. Choose the BEST direction to move RIGHT NOW.
+
+STRATEGY (in priority order):
+1. SURVIVAL: Avoid ghosts that are NOT scared. If a ghost is within 3 cells, move AWAY from it.
+2. COLLECT: Move toward the nearest dot. Dots are the PRIMARY objective.
+3. HUNT: Only chase a scared ghost if it is exactly 1 cell away.
+4. POWER PELLETS: Only approach if a ghost is actively blocking your dot path.
+5. TUNNELS: Use the left/right tunnel edges (x=0 and x=20 are connected) to escape.
+
+IMPORTANT: Never move into a direction with 0 escape routes if a ghost is nearby.
+The grid is ${C} wide x ${R} tall. Left edge wraps to right edge.`,
+        criteria
+      }
+    }
+  };
+
   const t0=performance.now();
-  fetch('http://localhost:4000/api/jev',{method:'POST',
+  document.getElementById('jev-thinking').textContent='JEV pensando...';
+
+  fetch('http://localhost:4000/api/jev',{
+    method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({state,model:'jev-latest',questions:{strat:{type:'choice',
-      instructions:'Best strategy? FLEE if ghost close. COLLECT dots. HUNT scared ghosts nearby. POWER-UP if stuck.',
-      criteria:{FLEE:'Ghost close, run!','COLLECT':'Safe to collect dots',HUNT:'Scared ghost nearby','POWERUP':'Get pellet to clear path'}}}})
+    body:JSON.stringify(body)
   }).then(r=>r.json()).then(data=>{
-    jevMs=Math.round(performance.now()-t0);const a=data.answers?.strat;
-    if(a){showJev(a,jevMs);if(a.confidence>0.6){const m={FLEE:'HUIR','COLLECT':'COLECTAR',HUNT:'CAZAR','POWERUP':'POWER-RUN'};if(m[a.choice])aiStrategy=m[a.choice];}}
-  }).catch(e=>{jevMs=Math.round(performance.now()-t0);}).finally(()=>{jevBusy=false;});
+    jevMs=Math.round(performance.now()-t0);
+    const a=data.answers?.dir;
+    if(a){
+      jevChoice=a.choice||'?';
+      jevConfidence=a.confidence||0;
+      showJev(a,jevMs);
+
+      // JEV is the ONLY brain — use its choice directly
+      if(avail.includes(jevChoice)){
+        pm.nd=[...DIR_V[jevChoice]];
+        lastJevDir=jevChoice;
+      }
+    }
+  }).catch(e=>{
+    jevMs=Math.round(performance.now()-t0);
+    document.getElementById('jev-thinking').textContent='Error: '+e.message;
+    logJev('ERROR: '+e.message,1);
+  }).finally(()=>{
+    jevBusy=false;
+  });
 }
+
 function showJev(a,ms){
   const p=a.probabilities||{};
   document.getElementById('jev-ms').innerHTML=ms+' <small>ms</small>';
-  const sn=['FLEE','COLLECT','HUNT','POWERUP'];
-  for(let i=0;i<4;i++){const d=DIR_K[i];const v=p[sn[i]]||0;document.getElementById('b'+d[0]).style.width=v*100+'%';document.getElementById('p'+d[0]).textContent=Math.round(v*100)+'%';}
-  const ch=a.choice||'?';const cf=a.confidence!=null?Math.round(a.confidence*100)+'%':'--';
-  document.getElementById('jev-act').innerHTML=`<span style="color:#76ff03">${ch}</span> &middot; Conf: ${cf}`;
-  logJev(`${ch} &middot; ${ms}ms &middot; conf=${cf}`);
+  document.getElementById('jev-thinking').textContent='';
+
+  // Update direction bars
+  for(const d of DIR_K){
+    const v=p[d]||0;
+    document.getElementById('b'+d[0]).style.width=v*100+'%';
+    document.getElementById('p'+d[0]).textContent=Math.round(v*100)+'%';
+  }
+
+  const ch=a.choice||'?';
+  const cf=a.confidence!=null?Math.round(a.confidence*100)+'%':'--';
+  const colorMap={up:'#F72585',down:'#7209b7',left:'#3a0ca3',right:'#4CC9F0'};
+  document.getElementById('jev-act').innerHTML=
+    `<span style="color:${colorMap[ch]||'#ffe033'};font-size:14px;font-weight:bold">${ch.toUpperCase()}</span> &middot; Conf: ${cf}`;
+  document.getElementById('s-calls').textContent=jevCalls;
+
+  logJev(`${ch.toUpperCase()} &middot; ${ms}ms &middot; conf=${cf}`,0);
 }
+
 function logJev(m,err){
   const el=document.getElementById('jev-log');const t=new Date().toLocaleTimeString();
   const cls=err===1?'e':err===0?'ok':'t';
@@ -424,15 +404,22 @@ function logJev(m,err){
   if(el.innerHTML.length>3000)el.innerHTML=el.innerHTML.slice(0,3000);
 }
 
-// ═══ GAME UPDATE ═══
+// ═══ GAME LOOP ═══
 let ghostTick=0;
 function tick(){
   if(!pm)return;
   ghostTick++;
-  if(mode==='jev'){const ai=localAI();if(ai)pm.nd=[...ai];}
+
+  // Ask JEV for direction — JEV is the ONLY brain
+  // Fire async request, use last known direction while waiting
+  if(!jevBusy)askJev();
+
+  // Apply JEV's last direction
   const prevPmX=pm.gx,prevPmY=pm.gy;
   if(pm.nd[0]||pm.nd[1]){if(canP(pm.gx,pm.gy,pm.nd,false))pm.d=[...pm.nd];}
   if(pm.d[0]||pm.d[1]){if(canP(pm.gx,pm.gy,pm.d,false)){pm.gx+=pm.d[0];pm.gy+=pm.d[1];pm.gx=wrapX(pm.gx);}else pm.d=[0,0];}
+
+  // Collect dots
   for(let i=dots.length-1;i>=0;i--){if(dots[i].gx===pm.gx&&dots[i].gy===pm.gy){dots.splice(i,1);score+=10;}}
   for(let i=powers.length-1;i>=0;i--){
     if(powers[i].gx===pm.gx&&powers[i].gy===pm.gy){
@@ -443,7 +430,11 @@ function tick(){
       scaredTimer=setTimeout(()=>{ghosts.forEach(g=>g.scared=false);scaredTimer=null;},st);
     }
   }
+
+  // Ghost movement (every 2 ticks for balance)
   if(ghostTick%2===0)ghosts.forEach((g,i)=>ghostAI(g,i));
+
+  // Collision detection
   ghosts.forEach(g=>{
     if(!g||g.dead||!g.d)return;
     if(g._prevGx===undefined){g._prevGx=g.gx;g._prevGy=g.gy;}
@@ -455,17 +446,18 @@ function tick(){
     }
     g._prevGx=g.gx;g._prevGy=g.gy;
   });
-  if(!dots.length&&!powers.length){level++;init();pm.reset();}
+
+  // Level complete
+  if(!dots.length&&!powers.length){level++;init();pm.reset();logJev(`NIVEL ${level}!`,0);}
   ui();
-  if(mode==='jev'&&!jevBusy&&Date.now()%8<1)askJev();
 }
 
+// ═══ UI ═══
 function ui(){
   document.getElementById('s-sc').textContent=score;
   document.getElementById('s-lv').innerHTML='&#9829; '.repeat(Math.max(0,lives)).trim();
   document.getElementById('s-lv2').textContent=level;
   document.getElementById('s-dt').textContent=(dots.length+powers.length)+'/'+totalD;
-  document.getElementById('s-st').textContent=aiStrategy;
   const df=document.getElementById('s-df');
   if(level<=1){df.textContent='Normal';df.style.color='#ffe033';}
   else if(level<=2){df.textContent='Dificil';df.style.color='#FFB852';}
@@ -473,6 +465,7 @@ function ui(){
   else{df.textContent='EXTREMO';df.style.color='#F72585';}
 }
 
+// ═══ DRAW ═══
 function draw(){
   try{
   cx.fillStyle=COL.bg;cx.fillRect(0,0,W,H);
@@ -486,7 +479,7 @@ function draw(){
   for(const d of dots){cx.beginPath();cx.arc(d.gx*SZ+SZ/2,d.gy*SZ+SZ/2,3,0,Math.PI*2);cx.fill();}
   const pulse=.5+.5*Math.sin(Date.now()/120);
   for(const p of powers){cx.globalAlpha=pulse;cx.fillStyle=COL.power;cx.beginPath();cx.arc(p.gx*SZ+SZ/2,p.gy*SZ+SZ/2,7,0,Math.PI*2);cx.fill();cx.globalAlpha=1;}
-  pacAnim+=.18;const mov=pm.d[0]||pm.d[1];const ma=mov?0.15+0.15*Math.sin(pacAnim*3):0.08;
+  const mov=pm.d[0]||pm.d[1];const ma=mov?0.15+0.15*Math.sin(Date.now()/80):0.08;
   const ang=Math.atan2(pm.d[1]||0,pm.d[0]||0);
   cx.fillStyle=COL.pac;cx.beginPath();cx.arc(pm.px(),pm.py(),SZ/2-2,ang+ma*Math.PI,ang+(2-ma)*Math.PI);cx.lineTo(pm.px(),pm.py());cx.fill();
   const ex=pm.px()+Math.cos(ang)*5-2,ey=pm.py()+Math.sin(ang)*5-4;
@@ -503,39 +496,34 @@ function draw(){
   }
   for(let i=0;i<lives;i++){cx.fillStyle=COL.pac;cx.beginPath();cx.arc(16+i*22,H-14,8,.25*Math.PI,1.75*Math.PI);cx.lineTo(16+i*22,H-14);cx.fill();}
   cx.fillStyle='#333';cx.font='10px Courier New';cx.textAlign='right';cx.fillText('LV '+level,W-10,H-10);cx.textAlign='left';
-  if(mode==='jev'){cx.fillStyle='rgba(0,0,0,.6)';cx.fillRect(5,5,90,18);cx.fillStyle=aiStrategy==='HUIR'?'#F72585':aiStrategy==='COLECTAR'?'#76ff03':aiStrategy==='CAZAR'?'#4CC9F0':'#ffe033';cx.font='bold 11px Courier New';cx.fillText(aiStrategy,10,18);}
+  // JEV brain indicator
+  cx.fillStyle='rgba(247,37,133,'+(jevBusy?0.8:0.3)+')';cx.beginPath();cx.arc(W-30,20,jevBusy?8:5,0,Math.PI*2);cx.fill();
+  cx.fillStyle='#fff';cx.font='bold 8px Courier New';cx.textAlign='center';cx.fillText('J',W-30,23);cx.textAlign='left';
   }catch(e){cx.fillStyle='#f00';cx.font='14px Courier New';cx.fillText('Error: '+e.message,10,20);}
 }
 
 let lt=0;const TMS=130;
 function loop(ts){if(!running)return;if(ts-lt>=TMS){lt=ts;tick();}draw();requestAnimationFrame(loop);}
 
-document.addEventListener('keydown',e=>{
-  if(mode!=='manual')return;
-  const m={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',w:'up',s:'down',a:'left',d:'right',W:'up',S:'down',A:'left',D:'right'};
-  const d=m[e.key];if(d){e.preventDefault();pm.nd=[...DIR_V[d]];}
-});
-function setMode(m){
-  mode=m;document.querySelectorAll('.btn-mode').forEach(b=>b.classList.remove('active'));
-  document.querySelector('.mode-'+m).classList.add('active');
-  document.getElementById('jev-box').style.display=m==='jev'?'block':'none';
-}
 function startGame(){
-  score=0;lives=3;level=1;aiStrategy='-';
+  score=0;lives=3;level=1;jevCalls=0;jevMs=0;lastJevDir=null;jevBusy=false;
   init();pm.reset();
   document.getElementById('ov').classList.add('h');
   document.getElementById('btn-go').disabled=true;
   document.getElementById('jev-log').innerHTML='';
   document.getElementById('jev-ms').innerHTML='-- <small>ms</small>';
   document.getElementById('jev-act').innerHTML='';
+  document.getElementById('jev-thinking').textContent='Iniciando cerebro JEV...';
   for(const d of DIR_K){document.getElementById('b'+d[0]).style.width='0%';document.getElementById('p'+d[0]).textContent='0%';}
   running=true;lt=0;requestAnimationFrame(loop);
+  logJev('Juego iniciado — JEV es el unico cerebro',0);
 }
 function gameOver(){
   running=false;document.getElementById('btn-go').disabled=false;
   const o=document.getElementById('ov');o.classList.remove('h');
   o.querySelector('h2').textContent='GAME OVER';
-  o.querySelector('p').textContent='Puntos: '+score+' — Nivel '+level+' — Presiona INICIAR';
+  o.querySelector('p').textContent=`Puntos: ${score} — Nivel ${level} — JEV Calls: ${jevCalls} — Presiona INICIAR`;
+  logJev(`GAME OVER — Score: ${score}, Level: ${level}, JEV Calls: ${jevCalls}`,1);
 }
 </script>
 </body>
