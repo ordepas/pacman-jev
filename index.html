@@ -138,7 +138,7 @@ const G=[
 
 let walls=new Set(),dots=[],powers=[];
 let mode='manual',running=false,score=0,lives=3,level=1,totalD=0;
-let jevBusy=false,jevMs=0,pacAnim=0,aiStrategy='-';
+let pacAnim=0,aiStrategy='-';
 let scaredTimer=null;
 const GSTARTS=[[9,9],[10,9],[11,9],[10,10]];
 
@@ -530,40 +530,36 @@ function decideMove(a,avail){
 
 // ── Show DOOM-style results in UI ──
 function showDoomJev(a,ms){
-  document.getElementById('jev-ms').innerHTML=ms+' <small>ms</small>';
-  document.getElementById('jev-thinking').textContent='';
+  const msEl=document.getElementById('jev-ms');if(msEl)msEl.innerHTML=ms+' <small>ms</small>';
+  const thEl=document.getElementById('jev-thinking');if(thEl)thEl.textContent='';
 
   // Show danger level bar
   const danger=a.danger_level||{score:0,confidence:0};
   const dangerPct=Math.round((danger.score/3)*100);
-  document.getElementById('bu').style.width=dangerPct+'%';
-  document.getElementById('pu').textContent=dangerPct+'%';
+  const bu=document.getElementById('bu');if(bu)bu.style.width=dangerPct+'%';
+  const pu=document.getElementById('pu');if(pu)pu.textContent=dangerPct+'%';
 
   // Show ghost danger noul
   const gd=a.ghost_danger||{noul:0};
-  document.getElementById('bd').style.width=Math.round(gd.noul*100)+'%';
-  document.getElementById('pd').textContent=Math.round(gd.noul*100)+'%';
+  const bd=document.getElementById('bd');if(bd)bd.style.width=Math.round(gd.noul*100)+'%';
+  const pd=document.getElementById('pd');if(pd)pd.textContent=Math.round(gd.noul*100)+'%';
 
   // Show collect confidence
   const cc=a.collect_dir||{confidence:0};
-  document.getElementById('bl').style.width=Math.round((cc.confidence||0)*100)+'%';
-  document.getElementById('pl').textContent=Math.round((cc.confidence||0)*100)+'%';
+  const bl=document.getElementById('bl');if(bl)bl.style.width=Math.round((cc.confidence||0)*100)+'%';
+  const pl=document.getElementById('pl');if(pl)pl.textContent=Math.round((cc.confidence||0)*100)+'%';
 
   // Show path safety
   const ps=a.path_safe||{noul:0};
-  document.getElementById('br').style.width=Math.round(ps.noul*100)+'%';
-  document.getElementById('pr').textContent=Math.round(ps.noul*100)+'%';
+  const br=document.getElementById('br');if(br)br.style.width=Math.round(ps.noul*100)+'%';
+  const pr=document.getElementById('pr');if(pr)pr.textContent=Math.round(ps.noul*100)+'%';
 
   const cf=danger.confidence!=null?Math.round(danger.confidence*100)+'%':'--';
-  document.getElementById('jev-act').innerHTML=
-    `<span style="color:#F72585">${aiStrategy}</span> &middot; Danger:${Math.round(gd.noul*100)}% &middot; Conf:${cf}`;
-  document.getElementById('s-calls').textContent=jevCalls;
+  const actEl=document.getElementById('jev-act');if(actEl)
+    actEl.innerHTML=`<span style="color:#F72585">${aiStrategy}</span> · Danger:${Math.round(gd.noul*100)}% · Conf:${cf}`;
+  const callsEl=document.getElementById('s-calls');if(callsEl)callsEl.textContent=jevCalls;
 
-  // Update bar labels
-  const labels=document.querySelectorAll('.dbar .lbl');
-  if(labels.length>=4){labels[0].textContent='!';labels[1].textContent='G';labels[2].textContent='C';labels[3].textContent='P';}
-
-  logJev(`${aiStrategy} &middot; ${ms}ms &middot; danger=${Math.round(gd.noul*100)}% hunt=${Math.round((a.should_hunt?.noul||0)*100)}% path=${Math.round(ps.noul*100)}%`,0);
+  logJev(`${aiStrategy} · ${ms}ms · danger=${Math.round(gd.noul*100)}% hunt=${Math.round((a.should_hunt?.noul||0)*100)}% path=${Math.round(ps.noul*100)}%`,0);
 }
 function logJev(m,err){
   const el=document.getElementById('jev-log');const t=new Date().toLocaleTimeString();
