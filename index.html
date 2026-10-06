@@ -253,276 +253,88 @@ function ghostAI(g,idx){
 // ═══════════════════════════════════════════════════════════
 
 let jevBusy=false, jevMs=0, jevCalls=0;
-let jevPlan=[]; // Sequence of moves from JEV
+let lastJevDir=null;
 let jevConfidence=0;
 let jevChoice='?';
+let ticksSinceLastJev=0;
+const MAX_COAST_TICKS=4; // Max ticks to coast on last JEV dir before forcing stop
 
 function buildJevState(){
   const gInfo=ghosts.map((g,i)=>{
     if(!g||g.dead)return null;
     const dist=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);
-    const dir=g.d?(g.d[1]<0?'up':g.d[1]>0?'down':g.d[0]<0?'left':'right'):'?';
-    return{i,dist,dir,scared:g.scared,x:g.gx,y:g.gy};
-  }).filter(Boolean).sort((a,b)=>a.dist-b.dist);
+    const dir=g.d?(g.d[1]<0?'U':g.d[1]>0?'D':g.d[0]<0?'L':'R'):'?';
+    return`${g.scared?'s':''}${dir}d${dist}`;
+  }).filter(Boolean).sort().join(' ');
 
-  const nearDots=dots.map(d=>{
-    const dist=Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy);
-    return{x:d.gx,y:d.gy,dist};
-  }).sort((a,b)=>a.dist-b.dist).slice(0,5);
-
-  const powInfo=powers.map(p=>{
-    const dist=Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy);
-    return{x:p.gx,y:p.gy,dist};
-  });
+  const nearDots=dots.map(d=>({x:d.gx,y:d.gy,d:Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy)}))
+    .sort((a,b)=>a.d-b.d).slice(0,3).map(d=>`(${d.x},${d.y})${d.d}`).join(' ');
 
   const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
 
-  // Compact grid neighborhood — 5x5 around Pac-Man
-  const hood=[];
+  // 5x5 grid view
+  let hood='';
   for(let dy=-2;dy<=2;dy++){
-    let row='';
     for(let dx=-2;dx<=2;dx++){
       let nx=pm.gx+dx,ny=pm.gy+dy;
       if(nx<0)nx+=C;if(nx>=C)nx-=C;
       const cell=G[ny]?.[nx];
-      if(dx===0&&dy===0)row+='P';
-      else if(cell===1||cell===9)row+='#';
-      else if(cell===2)row+='G';
-      else if(cell===6)row+='g';
-      else if(powers.some(p=>p.gx===nx&&p.gy===ny))row+='O';
-      else if(dots.some(d=>d.gx===nx&&d.gy===ny))row+='.';
-      else row+=' ';
+      if(dx===0&&dy===0)hood+='P';
+      else if(cell===1||cell===9)hood+='#';
+      else if(cell===2)hood+='G';
+      else if(cell===6)hood+='g';
+      else if(powers.some(p=>p.gx===nx&&p.gy===ny))hood+='O';
+      else if(dots.some(d=>d.gx===nx&&d.gy===ny))hood+='.';
+      else hood+=' ';
     }
-    hood.push(row);
+    if(dy<2)hood+='|';
   }
 
-  return{
-    p:{x:pm.gx,y:pm.gy,d:pm.d[1]<0?'U':pm.d[1]>0?'D':pm.d[0]<0?'L':pm.d[0]>0?'R':'-'},
-    g:gInfo.map(g=>`${g.scared?'s':''}g${g.i}:(${g.x},${g.y})d=${g.dist}`).join(' '),
-    dots:nearDots.map(d=>`(${d.x},${d.y})d=${d.dist}`).join(' '),
-    pow:powInfo.map(p=>`(${p.x},${p.y})d=${p.dist}`).join(' ')||'none',
-    avail:avail.join(','),
-    hood:hood.join('|'),
-    score,lives,level,
-    left:dots.length+powers.length,
-    total:totalD
-  };
+  return`P(${pm.gx},${pm.gy}) GHOSTS:[${gInfo}] DOTS:[${nearDots}] POW:[${powers.map(p=>`(${p.gx},${p.gy})`).join(',')||'none'}] GO:[${avail}] GRID:${hood} Lv${level} Sc${score} Left${dots.length+powers.length}`;
 }
 
 function askJev(){
   if(jevBusy)return;
   jevBusy=true;
   jevCalls++;
+  ticksSinceLastJev=0;
 
   const state=buildJevState();
-  const avail=state.avail.split(',');
+  const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
   if(!avail.length){jevBusy=false;return;}
 
+  const criteria={};
+  for(const d of avail){
+    const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
+    if(nx<0)nx=C-1;if(nx>=C)nx-=0;
+    let routes=0;
+    for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
+    let nearG=99;ghosts.forEach(g=>{if(g&&!g.dead){const dd=Math.abs(nx-g.gx)+Math.abs(ny-g.gy);if(dd<nearG)nearG=dd;}});
+    let hasDot=dots.some(dd=>dd.gx===nx&&dd.gy===ny)?' dot':'';
+    criteria[d]=`${d}→(${nx},${ny}) exits:${routes} ghost:${nearG}${hasDot}`;
+  }
+
   const body={
-    state:JSON.stringify(state),
+    state,
     model:'jev-latest',
     questions:{
-      route:{
+      dir:{
         type:'choice',
-        instructions:`You control PAC-MAN on a ${C}x${R} grid. P=you, #=wall, .=dot, O=power pellet, G=ghost pen, g=ghost. Left/right edges connect (tunnel).
+        instructions:`You are PAC-MAN on a ${C}x${R} grid. P=you, #=wall, .=dot, O=power, G=ghost. Grid rows separated by |. Left/right edges connect (tunnel).
 
-Choose a 5-step route. Each step is a direction: U=up, D=down, L=left, R=right.
-
-RULES (strict priority):
-1. NEVER walk into a ghost (distance <=2). FLEE by maximizing distance.
-2. Collect dots (.) as primary goal. Head toward nearest dot clusters.
-3. Chase scared ghosts ONLY if adjacent (distance=1).
-4. Prefer paths with multiple escape routes over dead ends.
-5. Use tunnels (x=0 ↔ x=20) for fast escape or traversal.
-6. If stuck, move toward open areas (3+ exits).
-
-Respond with a 5-letter string like "RRDLU" — one letter per step. Each letter must be a valid direction from the current or predicted position.`,
-        criteria:{
-          RRRRR:"Go right 5 steps",
-          RRRRL:"Right 4, then left",
-          RRRRD:"Right 4, then down",
-          RRRRU:"Right 4, then up",
-          RRRDL:"Right 3, down, left",
-          RRRDR:"Right 3, down, right",
-          RRRDU:"Right 3, down, up",
-          RRRUL:"Right 3, up, left",
-          RRRUR:"Right 3, up, right",
-          RRRUU:"Right 3, up 2",
-          RRDDDD:"Right 2, down 3",
-          RRDDDL:"Right 2, down 3, left",
-          RRDDLL:"Right 2, down 2, left 2",
-          RRDDLR:"Right 2, down 2, left, right",
-          RRDDLU:"Right 2, down 2, left, up",
-          RRDDRR:"Right 2, down 2, right 2",
-          RRDDRL:"Right 2, down 2, right, left",
-          RRDDRU:"Right 2, down 2, right, up",
-          RRDDUU:"Right 2, down 2, up 2",
-          RRDL:"Right 2, down, left",
-          RRDLU:"Right 2, down, left, up",
-          RRDR:"Right 2, down, right",
-          RRDU:"Right 2, down, up",
-          RRLLRR:"Right 2, left 2, right 2",
-          RRUUDD:"Right 2, up 2, down 2",
-          RUUUUU:"Right, up 4",
-          RUUUUD:"Right, up 4, down",
-          RUUUUL:"Right, up 3, left",
-          RUUUUR:"Right, up 3, right",
-          RUUUD:"Right, up 3, down",
-          RUUULL:"Right, up 2, left 2",
-          RUUD:"Right, up 2, down",
-          RUL:"Right, up, left",
-          RUU:"Right, up 2",
-          RDDDDD:"Right, down 4",
-          RDDDDL:"Right, down 4, left",
-          RDDDDR:"Right, down 4, right",
-          RDDDDU:"Right, down 4, up",
-          RDDDL:"Right, down 3, left",
-          RDDDR:"Right, down 3, right",
-          RDDDU:"Right, down 3, up",
-          RDDLL:"Right, down 2, left 2",
-          RDDLR:"Right, down 2, left, right",
-          RDDLU:"Right, down 2, left, up",
-          RDDRR:"Right, down 2, right 2",
-          RDDRL:"Right, down 2, right, left",
-          RDDRU:"Right, down 2, right, up",
-          RDDUU:"Right, down 2, up 2",
-          RDL:"Right, down, left",
-          RDLU:"Right, down, left, up",
-          RDR:"Right, down, right",
-          RDU:"Right, down, up",
-          LLLLL:"Left 5 steps",
-          LLLLR:"Left 4, then right",
-          LLLLD:"Left 4, then down",
-          LLLLU:"Left 4, then up",
-          LLLDL:"Left 3, down, left",
-          LLLDR:"Left 3, down, right",
-          LLLDU:"Left 3, down, up",
-          LLLUL:"Left 3, up, left",
-          LLLUR:"Left 3, up, right",
-          LLLUU:"Left 3, up 2",
-          LLDDDD:"Left 2, down 3",
-          LLDDDL:"Left 2, down 3, left",
-          LLDDLL:"Left 2, down 2, left 2",
-          LLDDLR:"Left 2, down 2, left, right",
-          LLDDLU:"Left 2, down 2, left, up",
-          LLDDRR:"Left 2, down 2, right 2",
-          LLDDRL:"Left 2, down 2, right, left",
-          LLDDRU:"Left 2, down 2, right, up",
-          LLDDUU:"Left 2, down 2, up 2",
-          LLDL:"Left 2, down, left",
-          LLDLU:"Left 2, down, left, up",
-          LLDR:"Left 2, down, right",
-          LLDU:"Left 2, down, up",
-          LLRRLL:"Left 2, right 2, left 2",
-          LLUUDD:"Left 2, up 2, down 2",
-          LUUUUU:"Left, up 4",
-          LUUUUD:"Left, up 4, down",
-          LUUUUL:"Left, up 3, left",
-          LUUUUR:"Left, up 3, right",
-          LUUUD:"Left, up 3, down",
-          LUUULL:"Left, up 2, left 2",
-          LUUD:"Left, up 2, down",
-          LUR:"Left, up, right",
-          LUU:"Left, up 2",
-          LDDDDD:"Left, down 4",
-          LDDDDL:"Left, down 4, left",
-          LDDDDR:"Left, down 4, right",
-          LDDDDU:"Left, down 4, up",
-          LDDDL:"Left, down 3, left",
-          LDDDR:"Left, down 3, right",
-          LDDDU:"Left, down 3, up",
-          LDDLL:"Left, down 2, left 2",
-          LDDLR:"Left, down 2, left, right",
-          LDDLU:"Left, down 2, left, up",
-          LDDRR:"Left, down 2, right 2",
-          LDDRL:"Left, down 2, right, left",
-          LDDRU:"Left, down 2, right, up",
-          LDDUU:"Left, down 2, up 2",
-          LDL:"Left, down, left",
-          LDLU:"Left, down, left, up",
-          LDR:"Left, down, right",
-          LDU:"Left, down, up",
-          UUUUU:"Up 5 steps",
-          UUUUR:"Up 4, then right",
-          UUUUD:"Up 4, then down",
-          UUUUL:"Up 4, then left",
-          UUUDU:"Up 3, down, up",
-          UUURR:"Up 2, right 2",
-          UUUULL:"Up 3, left 2",
-          UUDUUD:"Up 2, down, up, up, down",
-          UUDDUU:"Up 2, down 2, up 2",
-          UURUUR:"Up 2, right, up, up, right",
-          UULLUU:"Up 2, left 2, up 2",
-          UUUUUR:"Up 4, right",
-          DDDDD:"Down 5 steps",
-          DDDDR:"Down 4, then right",
-          DDDDL:"Down 4, then left",
-          DDDDU:"Down 4, then up",
-          DDDUD:"Down 3, up, down",
-          DDDRR:"Down 3, right 2",
-          DDDLL:"Down 3, left 2",
-          DDUUDD:"Down 2, up 2, down 2",
-          DDDL:"Down 3, left",
-          DDDR:"Down 3, right",
-          DDDU:"Down 3, up",
-          DDDDU:"Down 4, up",
-          DRDL:"Down, right, down, left",
-          DRDR:"Down, right, down, right",
-          DRU:"Down, right, up",
-          DLDR:"Down, left, down, right",
-          DLDL:"Down, left, down, left",
-          DLU:"Down, left, up",
-          RRDDR:"Right 2, down 2, right",
-          RRDDDD:"Right 2, down 4",
-          RRUUUR:"Right 2, up 3, right",
-          RRRRU:"Right 4, up",
-          RRRRD:"Right 4, down",
-          LLLLU:"Left 4, up",
-          LLLLD:"Left 4, down",
-          LLLLDR:"Left 4, down, right",
-          UUUUD:"Up 4, down",
-          UUUUL:"Up 4, left",
-          UUURR:"Up 3, right 2",
-          UURRR:"Up, right 3",
-          UUULL:"Up 2, left 3",
-          UULLL:"Up, left 3",
-          DDDDR:"Down 4, right",
-          DDDDL:"Down 4, left",
-          DDDUU:"Down 3, up 2",
-          DDRRR:"Down 2, right 3",
-          DDLLL:"Down 2, left 3",
-          DDDRR:"Down 3, right 2",
-          DDDLL:"Down 3, left 2",
-          RRDRDR:"Right, down, right, down, right",
-          RDRDR:"Right, down, right, down, right",
-          RURUR:"Right, up, right, up, right",
-          LDLDL:"Left, down, left, down, left",
-          LULUL:"Left, up, left, up, left",
-          RRUULL:"Right 2, up 2, left 2",
-          RRDDLL:"Right 2, down 2, left 2",
-          LLRRRR:"Left 2, right 4",
-          LLDDDD:"Left 2, down 4",
-          LLUUUU:"Left 2, up 4",
-          RRUUUU:"Right 2, up 4",
-          RRRUR:"Right 3, up, right",
-          RRRUL:"Right 3, up, left",
-          RRRDR:"Right 3, down, right",
-          RRRDL:"Right 3, down, left",
-          LLLUR:"Left 3, up, right",
-          LLLUL:"Left 3, up, left",
-          LLLDR:"Left 3, down, right",
-          LLLDL:"Left 3, down, left",
-          UUUUR:"Up 4, right",
-          UUUUL:"Up 4, left",
-          DDDDR:"Down 4, right",
-          DDDDL:"Down 4, left",
-        }
+Choose ONE direction. Priority:
+1. FLEE if ghost within 3 cells (NOT scared). Maximize distance + exits.
+2. COLLECT nearest dot (.) — dots win levels.
+3. Chase scared ghost ONLY if adjacent.
+4. Avoid dead-ends (exits:0-1) when ghosts nearby.
+5. Use tunnels for escape.`,
+        criteria
       }
     }
   };
 
   const t0=performance.now();
-  document.getElementById('jev-thinking').textContent='JEV planificando ruta...';
+  document.getElementById('jev-thinking').textContent='JEV pensando...';
 
   fetch('http://localhost:4000/api/jev',{
     method:'POST',
@@ -530,26 +342,15 @@ Respond with a 5-letter string like "RRDLU" — one letter per step. Each letter
     body:JSON.stringify(body)
   }).then(r=>r.json()).then(data=>{
     jevMs=Math.round(performance.now()-t0);
-    const a=data.answers?.route;
+    const a=data.answers?.dir;
     if(a){
       jevChoice=a.choice||'?';
       jevConfidence=a.confidence||0;
       showJev(a,jevMs);
 
-      // Parse route into move sequence
-      const route=(a.choice||'').toUpperCase();
-      const plan=[];
-      for(const ch of route){
-        const m={U:'up',D:'down',L:'left',R:'right'};
-        if(m[ch])plan.push(m[ch]);
-      }
-      if(plan.length>0){
-        jevPlan=plan;
-        // Apply first move immediately
-        const first=jevPlan.shift();
-        if(first&&canP(pm.gx,pm.gy,DIR_V[first],false)){
-          pm.nd=[...DIR_V[first]];
-        }
+      if(avail.includes(jevChoice)){
+        pm.nd=[...DIR_V[jevChoice]];
+        lastJevDir=jevChoice;
       }
     }
   }).catch(e=>{
@@ -564,26 +365,24 @@ Respond with a 5-letter string like "RRDLU" — one letter per step. Each letter
 function showJev(a,ms){
   const p=a.probabilities||{};
   document.getElementById('jev-ms').innerHTML=ms+' <small>ms</small>';
-  document.getElementById('jev-thinking').textContent='Ruta: '+(a.choice||'?').toUpperCase()+' ('+jevPlan.length+' pasos restantes)';
+  document.getElementById('jev-thinking').textContent='';
 
-  // Update direction bars — show probability per direction letter
-  const route=a.choice||'';
-  const firstDir=route[0];
-  const dirMap={U:'u',D:'d',L:'l',R:'r'};
+  // Update direction bars
   for(const d of DIR_K){
-    const letter=Object.entries(dirMap).find(([k,v])=>v===d[0])?.[0];
-    const isOnRoute=route.includes(letter);
-    document.getElementById('b'+d[0]).style.width=isOnRoute?'60%':'10%';
-    document.getElementById('b'+d[0]).style.opacity=isOnRoute?'1':'0.3';
-    document.getElementById('p'+d[0]).textContent=isOnRoute?letter:'';
+    const v=p[d]||0;
+    document.getElementById('b'+d[0]).style.width=v*100+'%';
+    document.getElementById('b'+d[0]).style.opacity=v>0?'1':'0.3';
+    document.getElementById('p'+d[0]).textContent=Math.round(v*100)+'%';
   }
 
+  const ch=a.choice||'?';
   const cf=a.confidence!=null?Math.round(a.confidence*100)+'%':'--';
+  const colorMap={up:'#F72585',down:'#7209b7',left:'#3a0ca3',right:'#4CC9F0'};
   document.getElementById('jev-act').innerHTML=
-    `<span style="color:#F72585;font-size:12px;font-weight:bold">${route}</span> &middot; Conf: ${cf}`;
+    `<span style="color:${colorMap[ch]||'#ffe033'};font-size:14px;font-weight:bold">${ch.toUpperCase()}</span> &middot; Conf: ${cf}`;
   document.getElementById('s-calls').textContent=jevCalls;
 
-  logJev(`Ruta: ${route} &middot; ${ms}ms &middot; conf=${cf}`,0);
+  logJev(`${ch.toUpperCase()} &middot; ${ms}ms &middot; conf=${cf}`,0);
 }
 
 function logJev(m,err){
@@ -599,15 +398,15 @@ function tick(){
   if(!pm)return;
   ghostTick++;
 
-  // Follow JEV plan — take next step from plan, or ask JEV for new plan
-  if(jevPlan.length>0){
-    const next=jevPlan.shift();
-    if(next&&canP(pm.gx,pm.gy,DIR_V[next],false)){
-      pm.nd=[...DIR_V[next]];
-    }
+  // Ask JEV for direction — JEV is the ONLY brain
+  if(!jevBusy)askJev();
+
+  // Coast on last JEV direction, but stop after MAX_COAST_TICKS if no new decision
+  ticksSinceLastJev++;
+  if(ticksSinceLastJev>MAX_COAST_TICKS){
+    // Stop moving if JEV hasn't responded — safer than blindly continuing
+    pm.nd=[0,0];
   }
-  // Ask JEV when plan is empty and not busy
-  if(jevPlan.length===0&&!jevBusy)askJev();
 
   // Apply direction
   const prevPmX=pm.gx,prevPmY=pm.gy;
@@ -701,7 +500,7 @@ let lt=0;const TMS=130;
 function loop(ts){if(!running)return;if(ts-lt>=TMS){lt=ts;tick();}draw();requestAnimationFrame(loop);}
 
 function startGame(){
-  score=0;lives=3;level=1;jevCalls=0;jevMs=0;jevPlan=[];jevBusy=false;
+  score=0;lives=3;level=1;jevCalls=0;jevMs=0;lastJevDir=null;jevBusy=false;ticksSinceLastJev=0;
   init();pm.reset();
   document.getElementById('ov').classList.add('h');
   document.getElementById('btn-go').disabled=true;
