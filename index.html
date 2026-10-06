@@ -248,8 +248,8 @@ function ghostAI(g,idx){
 }
 
 // ═══════════════════════════════════════════════════════════
-//  JEV — UNICO CEREBRO (Full Maze View)
-//  JEV ve el laberinto COMPLETO como texto.
+//  JEV — UNICO CEREBRO (Optimized)
+//  Compact state + strategic hints for better decisions.
 // ═══════════════════════════════════════════════════════════
 
 let jevBusy=false, jevMs=0, jevCalls=0;
@@ -257,69 +257,81 @@ let lastJevDir=null;
 let jevConfidence=0;
 let jevChoice='?';
 let ticksSinceLastJev=0;
-
-function buildFullMaze(){
-  // Build full R x C text grid with all entities
-  let rows=[];
-  for(let r=0;r<R;r++){
-    let row='';
-    for(let c=0;c<C;c++){
-      // Check if Pac-Man is here
-      if(pm.gx===c&&pm.gy===r){row+='P';continue;}
-      // Check if a ghost is here
-      let ghostHere=null;
-      for(let i=0;i<ghosts.length;i++){
-        const g=ghosts[i];
-        if(g&&!g.dead&&g.gx===c&&g.gy===r){ghostHere=i;break;}
-      }
-      if(ghostHere!==null){
-        row+=ghosts[ghostHere].scared?'s':('RBCO'[ghostHere]); // R=red,B=pink,C=cyan,O=orange
-        continue;
-      }
-      // Maze structure
-      const v=G[r][c];
-      if(v===1)row+='#';
-      else if(v===9)row+=' '; // void
-      else if(v===2)row+='G'; // ghost pen interior
-      else if(v===6)row+='g'; // ghost pen exit
-      else if(v===3)row+='T'; // tunnel
-      else if(powers.some(p=>p.gx===c&&p.gy===r))row+='O'; // power pellet
-      else if(dots.some(d=>d.gx===c&&d.gy===r))row+='.'; // dot
-      else row+=' '; // empty walkable
-    }
-    rows.push(row);
-  }
-  return rows.join('\n');
-}
+let stuckCount=0, lastDotCount=0;
 
 function buildJevState(){
-  const maze=buildFullMaze();
-  const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
-
-  // Ghost summary
-  const gSummary=ghosts.map((g,i)=>{
+  // Ghost info with predicted position (2 ticks ahead)
+  const gInfo=ghosts.map((g,i)=>{
     if(!g||g.dead)return null;
     const dist=Math.abs(g.gx-pm.gx)+Math.abs(g.gy-pm.gy);
-    const dir=g.d?(g.d[1]<0?'up':g.d[1]>0?'down':g.d[0]<0?'left':'right'):'?';
-    const name=['Red(R)','Pink(B)','Cyan(C)','Orange(O)'][i];
-    return`${name} at(${g.gx},${g.gy}) going ${dir} dist=${dist}${g.scared?' SCARED':''}`;
-  }).filter(Boolean).join('\n');
+    const dir=g.d?(g.d[1]<0?'U':g.d[1]>0?'D':g.d[0]<0?'L':'R'):'?';
+    // Predicted position in 2 ticks
+    const px=wrapX(g.gx+g.d[0]*2), py=g.gy+g.d[1]*2;
+    const pDist=Math.abs(px-pm.gx)+Math.abs(py-pm.gy);
+    const scared=g.scared?' SCARED':'';
+    return`G${i}(${g.gx},${g.gy})->${dir} dist=${dist} pred=(${px},${py})${scared}`;
+  }).filter(Boolean).join(' ');
 
-  return`MAZE (${C}x${R}):
-${maze}
+  // Nearest dot with BFS path hint
+  let pathHint='none';
+  const sortedDots=dots.map(d=>({...d,dist:Math.abs(d.gx-pm.gx)+Math.abs(d.gy-pm.gy)}))
+    .sort((a,b)=>a.dist-b.dist).slice(0,5);
+  if(sortedDots.length){
+    const nearest=sortedDots[0];
+    const path=bfs(pm.gx,pm.gy,new Set([nearest.gx+','+nearest.gy]),false);
+    if(path&&path.length>1){
+      const next=path[1];
+      const dx=next[0]-pm.gx, dy=next[1]-pm.gy;
+      const dirName=dy<0?'UP':dy>0?'DOWN':dx<0?'LEFT':dx>0?'RIGHT':'';
+      pathHint=`${dirName} to dot(${nearest.gx},${nearest.gy}) dist=${nearest.dist} steps=${path.length-1}`;
+    }
+  }
 
-LEGEND: P=Pac-Man(you) #=wall .=dot O=power pellet
-R=Red ghost B=Pink ghost C=Cyan ghost O=Orange ghost s=scared ghost
-G=ghost pen g=ghost pen exit T=tunnel(left↔right edges connect)
-Space=empty walkable
+  // Dot density per quadrant
+  const midC=C/2|0, midR=R/2|0;
+  let q=[0,0,0,0]; // TL,TR,BL,BR
+  dots.forEach(d=>{
+    if(d.gx<midC&&d.gy<midR)q[0]++;
+    else if(d.gx>=midC&&d.gy<midR)q[1]++;
+    else if(d.gx<midC&&d.gy>=midR)q[2]++;
+    else q[3]++;
+  });
 
-GHOSTS:
-${gSummary}
+  // Stuck detection
+  if(dots.length===lastDotCount)stuckCount++;else{stuckCount=0;lastDotCount=dots.length;}
+  const stuck=stuckCount>8?'STUCK!':'';
 
-YOU: Pac-Man at (${pm.gx},${pm.gy}) facing ${pm.d[1]<0?'up':pm.d[1]>0?'down':pm.d[0]<0?'left':pm.d[0]>0?'right':'none'}
-SCORE: ${score} LIVES: ${lives} LEVEL: ${level}
-DOTS REMAINING: ${dots.length+powers.length}/${totalD}
-AVAILABLE MOVES: ${avail.join(', ')}`;
+  // 5x5 neighborhood
+  let hood='';
+  for(let dy=-2;dy<=2;dy++){
+    for(let dx=-2;dx<=2;dx++){
+      let nx=pm.gx+dx,ny=pm.gy+dy;
+      if(nx<0)nx+=C;if(nx>=C)nx-=C;
+      if(dx===0&&dy===0)hood+='P';
+      else{
+        const cell=G[ny]?.[nx];
+        if(cell===1||cell===9)hood+='#';
+        else if(cell===2)hood+='G';
+        else if(cell===6)hood+='g';
+        else if(powers.some(p=>p.gx===nx&&p.gy===ny))hood+='O';
+        else if(dots.some(d=>d.gx===nx&&d.gy===ny))hood+='.';
+        else hood+=' ';
+      }
+    }
+    if(dy<2)hood+='|';
+  }
+
+  const avail=DIR_K.filter(d=>canP(pm.gx,pm.gy,DIR_V[d],false));
+
+  return`POS:(${pm.gx},${pm.gy}) ${pm.d[1]<0?'UP':pm.d[1]>0?'DOWN':pm.d[0]<0?'LEFT':pm.d[0]>0?'RIGHT':'STOP'}
+GHOSTS: ${gInfo||'none'}
+NEAREST DOTS: ${sortedDots.map(d=>`(${d.gx},${d.gy})${d.dist}`).join(' ')}
+BFS HINT: ${pathHint}
+POWER PELLETS: ${powers.map(p=>`(${p.gx},${p.gy})${Math.abs(p.gx-pm.gx)+Math.abs(p.gy-pm.gy)}`).join(' ')||'none'}
+DOT DENSITY: TL=${q[0]} TR=${q[1]} BL=${q[2]} BR=${q[3]}
+GRID(5x5): ${hood}
+AVAILABLE: ${avail.join(',')}
+SCORE:${score} LIVES:${lives} LEVEL:${level} DOTS_LEFT:${dots.length+powers.length}/${totalD} ${stuck}`;
 }
 
 function askJev(){
@@ -336,9 +348,9 @@ function askJev(){
   for(const d of avail){
     const v=DIR_V[d];let nx=pm.gx+v[0],ny=pm.gy+v[1];
     if(nx<0)nx=C-1;if(nx>=C)nx-=C;
-    let routes=0;
-    for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))routes++;}
-    criteria[d]=`Move ${d} — ${routes} exit routes from (${nx},${ny})`;
+    let exits=0;
+    for(const dk of DIR_K){const v2=DIR_V[dk];if(!isW(nx+v2[0],ny+v2[1],false))exits++;}
+    criteria[d]=`Go ${d}: ${exits} exits`;
   }
 
   const body={
@@ -347,27 +359,21 @@ function askJev(){
     questions:{
       dir:{
         type:'choice',
-        instructions:`You are controlling PAC-MAN. You can see the FULL maze above.
+        instructions:`You are PAC-MAN on a ${C}x${R} grid. Choose ONE direction.
 
-Choose the BEST direction to move RIGHT NOW.
-
-STRATEGY:
-1. SURVIVAL FIRST: If a ghost (R/B/C/O) is within 3 cells and NOT scared, MOVE AWAY. Prioritize directions with more exit routes.
-2. COLLECT DOTS: Dots (.) are the PRIMARY objective. Plan a path through dot-rich areas.
-3. TUNNEL ESCAPE: If cornered, use tunnels (T at edges) — they connect left↔right sides.
-4. HUNT SCARED: Only chase scared ghosts (s) if they are exactly 1 cell away.
-5. POWER PELLETS (O): Only go for them if a ghost is actively blocking your dot path.
-6. AVOID DEAD ENDS: Never enter a corridor with 1 exit when a ghost is nearby.
-7. PLAN AHEAD: Look at the full maze to find clusters of dots and plan efficient routes.
-
-The maze wraps horizontally — left edge connects to right edge at row ${10}.`,
+KEY RULES:
+1. If BFS HINT shows a direction, strongly prefer it UNLESS a ghost (dist<3) blocks that path.
+2. FLEE from ghosts within 3 cells (not scared). Choose direction with most exits.
+3. If STUCK, move toward the quadrant with most dots (DOT DENSITY).
+4. Grid 5x5: P=you #=wall .=dot O=power G=ghost pen g=ghost exit.
+5. Left/right edges connect (tunnel wrap).`,
         criteria
       }
     }
   };
 
   const t0=performance.now();
-  document.getElementById('jev-thinking').textContent='JEV analizando mapa completo...';
+  document.getElementById('jev-thinking').textContent='JEV pensando...';
 
   fetch('http://localhost:4000/api/jev',{
     method:'POST',
@@ -380,7 +386,6 @@ The maze wraps horizontally — left edge connects to right edge at row ${10}.`,
       jevChoice=a.choice||'?';
       jevConfidence=a.confidence||0;
       showJev(a,jevMs);
-
       if(avail.includes(jevChoice)){
         pm.nd=[...DIR_V[jevChoice]];
         lastJevDir=jevChoice;
